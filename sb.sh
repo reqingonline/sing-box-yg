@@ -3776,13 +3776,19 @@ sb
 fi
 }
 
+checksb(){
+${SING_BOX_BIN:-/etc/s-box/sing-box} check -c /etc/s-box/sb.json || { red "配置校验失败，未重启服务"; return 1; }
+}
+
 restartsb(){
+checksb || return 1
 if command -v apk >/dev/null 2>&1; then
 rc-service sing-box restart
+rc-service sing-box status >/dev/null 2>&1
 else
 systemctl enable sing-box
-systemctl start sing-box
 systemctl restart sing-box
+systemctl is-active --quiet sing-box
 fi
 }
 
@@ -3811,7 +3817,11 @@ fi
 cronsb(){
 uncronsb
 crontab -l 2>/dev/null > /tmp/crontab.tmp
-echo "0 1 * * * systemctl restart sing-box;rc-service sing-box restart" >> /tmp/crontab.tmp
+if command -v apk >/dev/null 2>&1; then
+echo "0 1 * * * rc-service sing-box restart" >> /tmp/crontab.tmp
+else
+echo "0 1 * * * systemctl try-restart sing-box" >> /tmp/crontab.tmp
+fi
 crontab /tmp/crontab.tmp >/dev/null 2>&1
 rm /tmp/crontab.tmp
 }
