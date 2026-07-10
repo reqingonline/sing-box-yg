@@ -193,19 +193,25 @@ service apache2 stop >/dev/null 2>&1
 systemctl disable apache2 >/dev/null 2>&1
 fi
 sleep 1
-green "执行开放端口，关闭防火墙完毕"
+green "兼容模式已关闭系统防火墙，请自行确认 VPS 后台安全组和端口暴露"
 }
 
 openyn(){
 red "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
-readp "是否开放端口，关闭防火墙？\n1、是，执行 (回车默认)\n2、否，跳过！自行处理\n请选择【1-2】：" action
+readp "防火墙处理：\n1、保留现有防火墙并显示端口提示 (回车默认)\n2、兼容模式：关闭系统防火墙 (不推荐)\n请选择【1-2】：" action
 if [[ -z $action ]] || [[ "$action" = "1" ]]; then
-close
+green "已保留现有系统防火墙"
 elif [[ "$action" = "2" ]]; then
-echo
+close
 else
 red "输入错误,请重新选择" && openyn
 fi
+}
+
+firewall_hint(){
+yellow "脚本默认保留现有系统防火墙。请在 VPS 后台安全组与系统防火墙放行以下端口："
+yellow "TCP：$port_vl_re $port_vm_ws${port_an:+ $port_an}"
+yellow "UDP：$port_hy2 $port_tu"
 }
 
 inssb(){
@@ -412,6 +418,7 @@ blue "Tuic-v5端口：$port_tu"
 if [[ "$sbnh" != "1.10" ]]; then
 blue "Anytls端口：$port_an"
 fi
+firewall_hint
 red "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
 green "四、自动生成各个协议统一的uuid (密码)"
 uuid=$(/etc/s-box/sing-box generate uuid)
