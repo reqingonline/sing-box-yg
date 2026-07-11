@@ -2404,9 +2404,9 @@ case $(uname -m) in
 aarch64) cpu=arm64;;
 x86_64) cpu=amd64;;
 esac
-curl -L -o /etc/s-box/cloudflared -# --retry 2 https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-$cpu
-#curl -L -o /etc/s-box/cloudflared -# --retry 2 https://gitlab.com/rwkgyg/sing-box-yg/-/raw/main/$cpu
-chmod +x /etc/s-box/cloudflared
+tmp=$(download_to_temp https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-$cpu /etc/s-box/cloudflared) || { red "cloudflared下载失败"; return 1; }
+atomic_install "$tmp" /etc/s-box/cloudflared 755 || { rm -f "$tmp"; red "cloudflared安装失败"; return 1; }
+rm -f "$tmp"
 fi
 }
 
@@ -4205,8 +4205,9 @@ case $(uname -m) in
 aarch64) cpu=arm64;;
 x86_64) cpu=amd64;;
 esac
-curl -L -o /etc/s-box/sbwpph -# --retry 2 --insecure https://raw.githubusercontent.com/yonggekkk/sing-box-yg/main/sbwpph_$cpu
-chmod +x /etc/s-box/sbwpph
+tmp=$(download_to_temp https://raw.githubusercontent.com/yonggekkk/sing-box-yg/main/sbwpph_$cpu /etc/s-box/sbwpph) || { red "WARP-plus下载失败"; return 1; }
+atomic_install "$tmp" /etc/s-box/sbwpph 755 || { rm -f "$tmp"; red "WARP-plus安装失败"; return 1; }
+rm -f "$tmp"
 fi
 ps -ef | grep '[s]bwpph' | awk '{print $2}' | xargs kill 2>/dev/null
 v4v6
