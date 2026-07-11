@@ -3802,8 +3802,31 @@ checksb(){
 ${SING_BOX_BIN:-/etc/s-box/sing-box} check -c /etc/s-box/sb.json || { red "配置校验失败，未重启服务"; return 1; }
 }
 
+config_state_dir=/etc/s-box/.last-known-good
+snapshot_config(){
+install -d -m 700 "$config_state_dir" || return 1
+for file in $sbfiles; do
+test -f "$file" && install -m 600 "$file" "$config_state_dir/$(basename "$file")"
+done
+}
+
+restore_config(){
+local restored=false file snapshot
+for file in $sbfiles; do
+snapshot="$config_state_dir/$(basename "$file")"
+if test -f "$snapshot"; then
+install -m 600 "$snapshot" "$file"
+restored=true
+fi
+done
+$restored
+}
+
 restartsb(){
-checksb || return 1
+if ! checksb; then
+restore_config && red "已恢复最后一次可用配置"
+return 1
+fi
 if command -v apk >/dev/null 2>&1; then
 rc-service sing-box restart
 rc-service sing-box status >/dev/null 2>&1
@@ -3812,6 +3835,7 @@ systemctl enable sing-box
 systemctl restart sing-box
 systemctl is-active --quiet sing-box
 fi
+snapshot_config
 }
 
 stclre(){

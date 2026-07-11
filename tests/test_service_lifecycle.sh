@@ -12,6 +12,8 @@ sed -n '/^checksb(){/,/^stclre(){/p' "$repo_root/sb.sh" | sed '$d' > "$fragment"
 red() { :; }
 systemctl() { printf '%s\n' "$*" >> "$log"; return 0; }
 source "$fragment"
+sbfiles=''
+snapshot_config() { :; }
 
 printf '#!/usr/bin/env bash\nexit 1\n' > "$bin"
 chmod +x "$bin"
