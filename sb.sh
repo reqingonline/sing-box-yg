@@ -3437,8 +3437,7 @@ menu=0,0,0
 fi
 sed -i "165s/$wgres/$menu/g" /etc/s-box/sb10.json
 sed -i "142s/$wgres/$menu/g" /etc/s-box/sb11.json
-rm -rf /etc/s-box/sb.json
-cp /etc/s-box/sb${num}.json /etc/s-box/sb.json
+install -m 600 /etc/s-box/sb${num}.json /etc/s-box/sb.json.new && mv -f /etc/s-box/sb.json.new /etc/s-box/sb.json
 restartsb
 green "设置结束"
 else
@@ -3939,15 +3938,7 @@ sb
 fi
 if [[ -n $upcore ]]; then
 green "开始下载并更新Sing-box内核……请稍等"
-sbname="sing-box-$upcore-linux-$cpu"
-curl -L -o /etc/s-box/sing-box.tar.gz  -# --retry 2 https://github.com/SagerNet/sing-box/releases/download/v$upcore/$sbname.tar.gz
-if [[ -f '/etc/s-box/sing-box.tar.gz' ]]; then
-tar xzf /etc/s-box/sing-box.tar.gz -C /etc/s-box
-mv /etc/s-box/$sbname/sing-box /etc/s-box
-rm -rf /etc/s-box/{sing-box.tar.gz,$sbname}
-if [[ -f '/etc/s-box/sing-box' ]]; then
-chown root:root /etc/s-box/sing-box
-chmod +x /etc/s-box/sing-box
+if install_sing_box_core "$upcore"; then
 sbnh=$(/etc/s-box/sing-box version 2>/dev/null | awk '/version/{print $NF}' 2>/dev/null | cut -d '.' -f 1,2)
 [[ "$sbnh" == "1.10" ]] && num=10 || num=11
 rm -rf /etc/s-box/sb.json
@@ -3955,10 +3946,7 @@ cp /etc/s-box/sb${num}.json /etc/s-box/sb.json
 restartsb && sbshare > /dev/null 2>&1
 blue "成功升级/切换 Sing-box 内核版本：$(/etc/s-box/sing-box version | awk '/version/{print $NF}')" && sleep 3 && sb
 else
-red "下载 Sing-box 内核不完整，安装失败，请重试" && upsbcroe
-fi
-else
-red "下载 Sing-box 内核失败或不存在，请重试" && upsbcroe
+red "核心下载、校验或安装失败，已保留当前版本" && upsbcroe
 fi
 else
 red "版本号检测出错，请重试" && upsbcroe
