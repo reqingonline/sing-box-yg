@@ -3851,9 +3851,15 @@ rm /tmp/crontab.tmp
 }
 
 lnsb(){
-rm -rf /usr/bin/sb
-curl -L -o /usr/bin/sb -# --retry 2 --insecure https://raw.githubusercontent.com/yonggekkk/sing-box-yg/main/sb.sh
-chmod +x /usr/bin/sb
+local tmp
+tmp=$(download_to_temp https://raw.githubusercontent.com/yonggekkk/sing-box-yg/main/sb.sh /usr/bin/sb) || { red "脚本下载失败，已保留当前版本"; return 1; }
+if ! bash -n "$tmp"; then
+rm -f "$tmp"
+red "脚本校验失败，已保留当前版本"
+return 1
+fi
+atomic_install "$tmp" /usr/bin/sb 755 || { rm -f "$tmp"; red "脚本更新失败，已保留当前版本"; return 1; }
+rm -f "$tmp"
 }
 
 upsbyg(){
