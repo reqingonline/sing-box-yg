@@ -229,6 +229,23 @@ install -m "$mode" "$source" "${destination}.new" || return 1
 mv -f "${destination}.new" "$destination"
 }
 
+install_sing_box_core(){
+local version=$1 directory=${SING_BOX_DIR:-/etc/s-box} api_base=${SING_BOX_RELEASE_API:-https://api.github.com/repos/SagerNet/sing-box/releases/tags} download_base=${SING_BOX_DOWNLOAD_BASE:-https://github.com/SagerNet/sing-box/releases/download} asset="sing-box-$1-linux-$cpu.tar.gz" api archive workdir expected actual candidate
+api=$(mktemp) || return 1
+curl --fail --location --retry 2 --proto '=https' -o "$api" "$api_base/v$version" || { rm -f "$api"; return 1; }
+expected=$(jq -r --arg name "$asset" '.assets[] | select(.name == $name) | .digest // empty' "$api")
+rm -f "$api"
+test -n "$expected" && test "${expected#sha256:}" != "$expected" || return 1
+archive=$(download_to_temp "$download_base/v$version/$asset" "$directory/sing-box.tar.gz") || return 1
+actual=$(sha256sum "$archive" | awk '{print $1}')
+test "$actual" = "${expected#sha256:}" || { rm -f "$archive"; return 1; }
+workdir=$(mktemp -d) || { rm -f "$archive"; return 1; }
+tar xzf "$archive" -C "$workdir" && candidate="$workdir/sing-box-$version-linux-$cpu/sing-box" && test -x "$candidate" && "$candidate" version >/dev/null 2>&1 && atomic_install "$candidate" "$directory/sing-box" 755
+local status=$?
+rm -rf "$workdir" "$archive"
+return $status
+}
+
 inssb(){
 red "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
 green "使用哪个内核版本？"
@@ -241,21 +258,11 @@ else
 sbcore='1.10.7'
 fi
 sbname="sing-box-$sbcore-linux-$cpu"
-curl -L -o /etc/s-box/sing-box.tar.gz  -# --retry 2 https://github.com/SagerNet/sing-box/releases/download/v$sbcore/$sbname.tar.gz
-if [[ -f '/etc/s-box/sing-box.tar.gz' ]]; then
-tar xzf /etc/s-box/sing-box.tar.gz -C /etc/s-box
-mv /etc/s-box/$sbname/sing-box /etc/s-box
-rm -rf /etc/s-box/{sing-box.tar.gz,$sbname}
-if [[ -f '/etc/s-box/sing-box' ]]; then
-chown root:root /etc/s-box/sing-box
-chmod +x /etc/s-box/sing-box
+if install_sing_box_core "$sbcore"; then
 blue "成功安装 Sing-box 内核版本：$(/etc/s-box/sing-box version | awk '/version/{print $NF}')"
 sbnh=$(/etc/s-box/sing-box version 2>/dev/null | awk '/version/{print $NF}' 2>/dev/null | cut -d '.' -f 1,2)
 else
-red "下载 Sing-box 内核不完整，安装失败，请再运行安装一次" && exit
-fi
-else
-red "下载 Sing-box 内核失败，请再运行安装一次，并检测VPS的网络是否可以访问Github" && exit
+red "核心下载、校验或安装失败，未写入新二进制" && exit
 fi
 }
 
