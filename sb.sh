@@ -214,6 +214,21 @@ yellow "TCP：$port_vl_re $port_vm_ws${port_an:+ $port_an}"
 yellow "UDP：$port_hy2 $port_tu"
 }
 
+download_to_temp(){
+local url=$1 destination=$2 tmp
+tmp=$(mktemp "${destination}.tmp.XXXXXX") || return 1
+curl --fail --location --retry 2 --proto '=https' -o "$tmp" "$url" || { rm -f "$tmp"; return 1; }
+test -s "$tmp" || { rm -f "$tmp"; return 1; }
+printf '%s\n' "$tmp"
+}
+
+atomic_install(){
+local source=$1 destination=$2 mode=${3:-755}
+test -s "$source" || return 1
+install -m "$mode" "$source" "${destination}.new" || return 1
+mv -f "${destination}.new" "$destination"
+}
+
 inssb(){
 red "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
 green "使用哪个内核版本？"
