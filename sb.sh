@@ -229,6 +229,24 @@ install -m "$mode" "$source" "${destination}.new" || return 1
 mv -f "${destination}.new" "$destination"
 }
 
+update_inbound_port(){
+local tag=$1 port=$2 file tmp updated=0
+[[ "$port" =~ ^[0-9]+$ ]] && (( port >= 1 && port <= 65535 )) || return 1
+for file in $sbfiles; do
+[ -f "$file" ] || continue
+jq -e --arg tag "$tag" '.inbounds | any(.tag == $tag)' "$file" >/dev/null 2>&1 || continue
+tmp=$(mktemp "${file}.tmp.XXXXXX") || return 1
+if ! jq --arg tag "$tag" --argjson port "$port" '(.inbounds[] | select(.tag == $tag) | .listen_port) = $port' "$file" > "$tmp"; then
+rm -f "$tmp"
+return 1
+fi
+chmod --reference="$file" "$tmp" || { rm -f "$tmp"; return 1; }
+mv -f "$tmp" "$file" || { rm -f "$tmp"; return 1; }
+updated=1
+done
+[ "$updated" -eq 1 ]
+}
+
 install_sing_box_core(){
 local version=$1 directory=${SING_BOX_DIR:-/etc/s-box} api_base=${SING_BOX_RELEASE_API:-https://api.github.com/repos/SagerNet/sing-box/releases/tags} download_base=${SING_BOX_DOWNLOAD_BASE:-https://github.com/SagerNet/sing-box/releases/download} asset="sing-box-$1-linux-$cpu.tar.gz" api archive workdir expected actual candidate
 api=$(mktemp) || return 1
@@ -2790,21 +2808,30 @@ green "0：返回上层"
 readp "请选择要变更端口的协议：" menu
 if [ "$menu" = "1" ]; then
 vlport
-echo $sbfiles | xargs -n1 sed -i "14s/$vl_port/$port_vl_re/"
-restartsb && sbshare > /dev/null 2>&1
+if update_inbound_port "vless-sb" "$port_vl_re" && restartsb; then
+sbshare > /dev/null 2>&1
 blue "Vless-reality端口更改完成"
+else
+red "Vless-reality端口更改失败，未生成新的分享链接"
+fi
 echo
 elif [ "$menu" = "5" ]; then
 anport
-echo $sbfiles | xargs -n1 sed -i "110s/$an_port/$port_an/"
-restartsb && sbshare > /dev/null 2>&1
+if update_inbound_port "anytls-sb" "$port_an" && restartsb; then
+sbshare > /dev/null 2>&1
 blue "Anytls端口更改完成"
+else
+red "Anytls端口更改失败，未生成新的分享链接"
+fi
 echo
 elif [ "$menu" = "2" ]; then
 vmport
-echo $sbfiles | xargs -n1 sed -i "41s/$vm_port/$port_vm_ws/"
-restartsb && sbshare > /dev/null 2>&1
+if update_inbound_port "vmess-sb" "$port_vm_ws" && restartsb; then
+sbshare > /dev/null 2>&1
 blue "Vmess-ws端口更改完成"
+else
+red "Vmess-ws端口更改失败，未生成新的分享链接"
+fi
 tls=$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[1].tls.enabled')
 if [[ "$tls" = "false" ]]; then
 blue "切记：如果Argo使用中，临时隧道必须重置，固定隧道的CF设置界面端口必须修改为$port_vm_ws"
@@ -2822,14 +2849,15 @@ if [ "$menu" = "1" ]; then
 if [ -n "$hy2_ports" ]; then
 hy2deports
 hy2port
-echo $sbfiles | xargs -n1 sed -i "67s/$hy2_port/$port_hy2/"
-restartsb && sbshare > /dev/null 2>&1
 else
 hy2port
-echo $sbfiles | xargs -n1 sed -i "67s/$hy2_port/$port_hy2/"
-restartsb && sbshare > /dev/null 2>&1
 fi
+if update_inbound_port "hy2-sb" "$port_hy2" && restartsb; then
+sbshare > /dev/null 2>&1
 blue "Hysteria2端口更改完成"
+else
+red "Hysteria2端口更改失败，未生成新的分享链接"
+fi
 elif [ "$menu" = "2" ]; then
 green "1：添加Hysteria2范围端口"
 green "2：添加Hysteria2单端口"
@@ -2863,14 +2891,15 @@ if [ "$menu" = "1" ]; then
 if [ -n "$tu5_ports" ]; then
 tu5deports
 tu5port
-echo $sbfiles | xargs -n1 sed -i "89s/$tu5_port/$port_tu/"
-restartsb && sbshare > /dev/null 2>&1
 else
 tu5port
-echo $sbfiles | xargs -n1 sed -i "89s/$tu5_port/$port_tu/"
-restartsb && sbshare > /dev/null 2>&1
 fi
+if update_inbound_port "tuic5-sb" "$port_tu" && restartsb; then
+sbshare > /dev/null 2>&1
 blue "Tuic5端口更改完成"
+else
+red "Tuic5端口更改失败，未生成新的分享链接"
+fi
 elif [ "$menu" = "2" ]; then
 green "1：添加Tuic5范围端口"
 green "2：添加Tuic5单端口"
