@@ -229,7 +229,7 @@ yellow "UDP：$port_hy2 $port_tu"
 download_to_temp(){
 local url=$1 destination=$2 tmp
 tmp=$(mktemp "${destination}.tmp.XXXXXX") || return 1
-curl --fail --location --retry 2 --proto '=https' -o "$tmp" "$url" || { rm -f "$tmp"; return 1; }
+curl --fail --location --retry 2 --connect-timeout 10 --max-time 300 --proto '=https' -o "$tmp" "$url" || { rm -f "$tmp"; return 1; }
 test -s "$tmp" || { rm -f "$tmp"; return 1; }
 printf '%s\n' "$tmp"
 }
@@ -248,6 +248,18 @@ tmp=$(download_to_temp "https://github.com/MetaCubeX/meta-rules-dat/releases/dow
 atomic_install "$tmp" "$database_dir/${asset}.db" 644 || { rm -f "$tmp"; return 1; }
 rm -f "$tmp"
 done
+}
+
+update_sbyg_version(){
+local destination=${SBYG_VERSION_FILE:-/etc/s-box/v} tmp version version_file
+tmp=$(download_to_temp https://raw.githubusercontent.com/yonggekkk/sing-box-yg/main/version "$destination") || return 1
+version=$(awk -F "更新内容" 'NR == 1 {print $1}' "$tmp" | sed 's/[[:space:]]*$//')
+rm -f "$tmp"
+test -n "$version" || return 1
+version_file=$(mktemp "${destination}.tmp.XXXXXX") || return 1
+printf '%s\n' "$version" > "$version_file" || { rm -f "$version_file"; return 1; }
+atomic_install "$version_file" "$destination" 644 || { rm -f "$version_file"; return 1; }
+rm -f "$version_file"
 }
 
 update_inbound_port(){
@@ -338,7 +350,7 @@ done
 install_sing_box_core(){
 local version=$1 directory=${SING_BOX_DIR:-/etc/s-box} api_base=${SING_BOX_RELEASE_API:-https://api.github.com/repos/SagerNet/sing-box/releases/tags} download_base=${SING_BOX_DOWNLOAD_BASE:-https://github.com/SagerNet/sing-box/releases/download} asset="sing-box-$1-linux-$cpu.tar.gz" api archive workdir expected actual candidate
 api=$(mktemp) || return 1
-curl --fail --location --retry 2 --proto '=https' -o "$api" "$api_base/v$version" || { rm -f "$api"; return 1; }
+curl --fail --location --retry 2 --connect-timeout 10 --max-time 30 --proto '=https' -o "$api" "$api_base/v$version" || { rm -f "$api"; return 1; }
 expected=$(jq -r --arg name "$asset" '.assets[] | select(.name == $name) | .digest // empty' "$api")
 rm -f "$api"
 test -n "$expected" && test "${expected#sha256:}" != "$expected" || return 1
@@ -2673,7 +2685,7 @@ inssbjsonser
 sbservice
 sbactive
 #curl -sL https://gitlab.com/rwkgyg/sing-box-yg/-/raw/main/version/version | awk -F "更新内容" '{print $1}' | head -n 1 > /etc/s-box/v
-curl -sL https://raw.githubusercontent.com/yonggekkk/sing-box-yg/main/version | awk -F "更新内容" '{print $1}' | head -n 1 > /etc/s-box/v
+update_sbyg_version || yellow "脚本版本标记更新失败，不影响已安装服务"
 red "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
 lnsb && blue "Sing-box-yg脚本安装成功，脚本快捷方式：sb" && cronsb
 echo
@@ -4029,7 +4041,10 @@ if [[ ! -f '/usr/bin/sb' ]]; then
 red "未正常安装Sing-box-yg" && exit
 fi
 lnsb
-curl -sL https://raw.githubusercontent.com/yonggekkk/sing-box-yg/main/version | awk -F "更新内容" '{print $1}' | head -n 1 > /etc/s-box/v
+if ! lnsb; then
+red "Sing-box-yg安装脚本升级失败，已保留当前版本" && return 1
+fi
+update_sbyg_version || yellow "脚本已更新，但版本标记刷新失败"
 green "Sing-box-yg安装脚本升级成功" && sleep 5 && sb
 }
 
