@@ -247,6 +247,73 @@ done
 [ "$updated" -eq 1 ]
 }
 
+update_vless_reality_server_name(){
+local server_name=$1 file tmp updated=0
+for file in $sbfiles; do
+[ -f "$file" ] || continue
+jq -e '.inbounds | any(.tag == "vless-sb")' "$file" >/dev/null 2>&1 || continue
+tmp=$(mktemp "${file}.tmp.XXXXXX") || return 1
+if ! jq --arg server_name "$server_name" '(.inbounds[] | select(.tag == "vless-sb") | .tls) |= (.server_name = $server_name | .reality.handshake.server = $server_name)' "$file" > "$tmp"; then
+rm -f "$tmp"
+return 1
+fi
+chmod --reference="$file" "$tmp" || { rm -f "$tmp"; return 1; }
+mv -f "$tmp" "$file" || { rm -f "$tmp"; return 1; }
+updated=1
+done
+[ "$updated" -eq 1 ]
+}
+
+update_inbound_tls(){
+local tag=$1 enabled=$2 server_name=$3 certificate_path=$4 key_path=$5 file tmp updated=0
+for file in $sbfiles; do
+[ -f "$file" ] || continue
+jq -e --arg tag "$tag" '.inbounds | any(.tag == $tag)' "$file" >/dev/null 2>&1 || continue
+tmp=$(mktemp "${file}.tmp.XXXXXX") || return 1
+if ! jq --arg tag "$tag" --arg enabled "$enabled" --arg server_name "$server_name" --arg certificate_path "$certificate_path" --arg key_path "$key_path" '(.inbounds[] | select(.tag == $tag) | .tls) |= (if $enabled == "" then . else .enabled = ($enabled == "true") end | if $server_name == "" then . else .server_name = $server_name end | if $certificate_path == "" then . else .certificate_path = $certificate_path end | if $key_path == "" then . else .key_path = $key_path end)' "$file" > "$tmp"; then
+rm -f "$tmp"
+return 1
+fi
+chmod --reference="$file" "$tmp" || { rm -f "$tmp"; return 1; }
+mv -f "$tmp" "$file" || { rm -f "$tmp"; return 1; }
+updated=1
+done
+[ "$updated" -eq 1 ]
+}
+
+update_vmess_path(){
+local path=$1 file tmp updated=0
+for file in $sbfiles; do
+[ -f "$file" ] || continue
+jq -e '.inbounds | any(.tag == "vmess-sb")' "$file" >/dev/null 2>&1 || continue
+tmp=$(mktemp "${file}.tmp.XXXXXX") || return 1
+if ! jq --arg path "$path" '(.inbounds[] | select(.tag == "vmess-sb") | .transport.path) = $path' "$file" > "$tmp"; then
+rm -f "$tmp"
+return 1
+fi
+chmod --reference="$file" "$tmp" || { rm -f "$tmp"; return 1; }
+mv -f "$tmp" "$file" || { rm -f "$tmp"; return 1; }
+updated=1
+done
+[ "$updated" -eq 1 ]
+}
+
+update_inbound_credentials(){
+local credential=$1 file tmp updated=0
+for file in $sbfiles; do
+[ -f "$file" ] || continue
+tmp=$(mktemp "${file}.tmp.XXXXXX") || return 1
+if ! jq --arg credential "$credential" '(.inbounds[]?.users[]?) |= (if has("uuid") then .uuid = $credential elif has("password") then .password = $credential else . end)' "$file" > "$tmp"; then
+rm -f "$tmp"
+return 1
+fi
+chmod --reference="$file" "$tmp" || { rm -f "$tmp"; return 1; }
+mv -f "$tmp" "$file" || { rm -f "$tmp"; return 1; }
+updated=1
+done
+[ "$updated" -eq 1 ]
+}
+
 install_sing_box_core(){
 local version=$1 directory=${SING_BOX_DIR:-/etc/s-box} api_base=${SING_BOX_RELEASE_API:-https://api.github.com/repos/SagerNet/sing-box/releases/tags} download_base=${SING_BOX_DOWNLOAD_BASE:-https://github.com/SagerNet/sing-box/releases/download} asset="sing-box-$1-linux-$cpu.tar.gz" api archive workdir expected actual candidate
 api=$(mktemp) || return 1
@@ -2628,10 +2695,12 @@ ym_vl_re=${menu:-apple.com}
 a=$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[0].tls.server_name')
 b=$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[0].tls.reality.handshake.server')
 c=$(cat /etc/s-box/vl_reality.txt | cut -d'=' -f5 | cut -d'&' -f1)
-echo $sbfiles | xargs -n1 sed -i "23s/$a/$ym_vl_re/"
-echo $sbfiles | xargs -n1 sed -i "27s/$b/$ym_vl_re/"
-restartsb && sbshare > /dev/null 2>&1
+if update_vless_reality_server_name "$ym_vl_re" && restartsb; then
+sbshare > /dev/null 2>&1
 blue "Vless-reality域名证书更换完毕"
+else
+red "Vless-reality域名证书更换失败，未生成新的分享链接"
+fi
 elif [ "$menu" = "2" ]; then
 if [ -f /root/ygkkkca/ca.log ]; then
 a=$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[1].tls.enabled')
@@ -2647,12 +2716,12 @@ else
 c_c='/etc/s-box/cert.pem'
 d_d='/etc/s-box/private.key'
 fi
-echo $sbfiles | xargs -n1 sed -i "55s#$a#$a_a#"
-echo $sbfiles | xargs -n1 sed -i "56s#$b#$b_b#"
-echo $sbfiles | xargs -n1 sed -i "57s#$c#$c_c#"
-echo $sbfiles | xargs -n1 sed -i "58s#$d#$d_d#"
-restartsb && sbshare > /dev/null 2>&1
+if update_inbound_tls "vmess-sb" "$a_a" "$b_b" "$c_c" "$d_d" && restartsb; then
+sbshare > /dev/null 2>&1
 blue "vmess-ws协议域名证书更换完毕"
+else
+red "vmess-ws协议域名证书更换失败，未生成新的分享链接"
+fi
 echo
 tls=$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[1].tls.enabled')
 vm_port=$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[1].listen_port')
@@ -2673,10 +2742,12 @@ else
 c_c='/etc/s-box/cert.pem'
 d_d='/etc/s-box/private.key'
 fi
-echo $sbfiles | xargs -n1 sed -i "79s#$c#$c_c#"
-echo $sbfiles | xargs -n1 sed -i "80s#$d#$d_d#"
-restartsb && sbshare > /dev/null 2>&1
+if update_inbound_tls "hy2-sb" "" "" "$c_c" "$d_d" && restartsb; then
+sbshare > /dev/null 2>&1
 blue "Hysteria2协议域名证书更换完毕"
+else
+red "Hysteria2协议域名证书更换失败，未生成新的分享链接"
+fi
 else
 red "当前未申请域名证书，不可切换。主菜单选择12，执行Acme证书申请" && sleep 2 && sb
 fi
@@ -2691,10 +2762,12 @@ else
 c_c='/etc/s-box/cert.pem'
 d_d='/etc/s-box/private.key'
 fi
-echo $sbfiles | xargs -n1 sed -i "102s#$c#$c_c#"
-echo $sbfiles | xargs -n1 sed -i "103s#$d#$d_d#"
-restartsb && sbshare > /dev/null 2>&1
+if update_inbound_tls "tuic5-sb" "" "" "$c_c" "$d_d" && restartsb; then
+sbshare > /dev/null 2>&1
 blue "Tuic5协议域名证书更换完毕"
+else
+red "Tuic5协议域名证书更换失败，未生成新的分享链接"
+fi
 else
 red "当前未申请域名证书，不可切换。主菜单选择12，执行Acme证书申请" && sleep 2 && sb
 fi
@@ -2709,10 +2782,12 @@ else
 c_c='/etc/s-box/cert.pem'
 d_d='/etc/s-box/private.key'
 fi
-echo $sbfiles | xargs -n1 sed -i "119s#$c#$c_c#"
-echo $sbfiles | xargs -n1 sed -i "120s#$d#$d_d#"
-restartsb && sbshare > /dev/null 2>&1
+if update_inbound_tls "anytls-sb" "" "" "$c_c" "$d_d" && restartsb; then
+sbshare > /dev/null 2>&1
 blue "Anytls协议域名证书更换完毕"
+else
+red "Anytls协议域名证书更换失败，未生成新的分享链接"
+fi
 else
 red "当前未申请域名证书，不可切换。主菜单选择12，执行Acme证书申请" && sleep 2 && sb
 fi
@@ -2945,9 +3020,12 @@ uuid=$(/etc/s-box/sing-box generate uuid)
 else
 uuid=$menu
 fi
-echo $sbfiles | xargs -n1 sed -i "s/$olduuid/$uuid/g"
-restartsb && sbshare > /dev/null 2>&1
+if update_inbound_credentials "$uuid" && restartsb; then
+sbshare > /dev/null 2>&1
 blue "已确认uuid (密码)：${uuid}" 
+else
+red "uuid (密码) 更改失败，未生成新的分享链接"
+fi
 blue "已确认Vmess的path路径：$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[1].transport.path')"
 elif [ "$menu" = "2" ]; then
 readp "输入Vmess的path路径，回车表示不变：" menu
@@ -2955,8 +3033,11 @@ if [ -z "$menu" ]; then
 echo
 else
 vmpath=$menu
-echo $sbfiles | xargs -n1 sed -i "50s#$oldvmpath#$vmpath#g"
-restartsb && sbshare > /dev/null 2>&1
+if update_vmess_path "$vmpath" && restartsb; then
+sbshare > /dev/null 2>&1
+else
+red "Vmess路径更改失败，未生成新的分享链接"
+fi
 fi
 blue "已确认Vmess的path路径：$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[1].transport.path')"
 else
