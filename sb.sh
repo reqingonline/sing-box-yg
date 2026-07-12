@@ -59,16 +59,17 @@ bbr="Openvz/Lxc"
 fi
 hostname=$(hostname)
 
-if [ ! -f sbyg_update ]; then
+dependency_marker=/etc/s-box/.sbyg-dependencies
+if [ ! -f "$dependency_marker" ]; then
 green "首次安装Sing-box-yg脚本必要的依赖……"
 if command -v apk >/dev/null 2>&1; then
 apk update
-apk add bash libc6-compat jq openssl procps busybox-extras iproute2 iputils coreutils expect git socat iptables grep tar tzdata util-linux
+apk add bash libc6-compat jq openssl procps busybox-extras iproute2 iputils coreutils expect git socat iptables grep tar tzdata util-linux wget xxd python3 qrencode
 apk add virt-what
 else
 if [[ $release = Centos && ${vsid} =~ 8 ]]; then
 cd /etc/yum.repos.d/ && mkdir backup && mv *repo backup/ 
-curl -o /etc/yum.repos.d/CentOS-Base.repo http://mirrors.aliyun.com/repo/Centos-8.repo
+curl -o /etc/yum.repos.d/CentOS-Base.repo https://mirrors.aliyun.com/repo/Centos-8.repo
 sed -i -e "s|mirrors.cloud.aliyuncs.com|mirrors.aliyun.com|g " /etc/yum.repos.d/CentOS-*
 sed -i -e "s|releasever|releasever-stream|g" /etc/yum.repos.d/CentOS-*
 yum clean all && yum makecache
@@ -94,7 +95,15 @@ systemctl enable iptables >/dev/null 2>&1
 systemctl start iptables >/dev/null 2>&1
 fi
 if [[ -z $vi ]]; then
+if [ -x "$(command -v apt-get)" ]; then
 apt install iputils-ping iproute2 systemctl -y
+elif [ -x "$(command -v apk)" ]; then
+apk add iputils iproute2
+elif [ -x "$(command -v yum)" ]; then
+yum install -y iputils iproute
+elif [ -x "$(command -v dnf)" ]; then
+dnf install -y iputils iproute
+fi
 fi
 
 packages=("curl" "openssl" "iptables" "tar" "expect" "wget" "xxd" "python3" "qrencode" "git")
@@ -109,11 +118,14 @@ elif [ -x "$(command -v yum)" ]; then
 yum install -y "$inspackage"
 elif [ -x "$(command -v dnf)" ]; then
 dnf install -y "$inspackage"
+elif [ -x "$(command -v apk)" ]; then
+apk add "$inspackage"
 fi
 fi
 done
 fi
-touch sbyg_update
+mkdir -p /etc/s-box
+touch "$dependency_marker"
 fi
 
 if [[ $vi = openvz ]]; then
@@ -227,6 +239,15 @@ local source=$1 destination=$2 mode=${3:-755}
 test -s "$source" || return 1
 install -m "$mode" "$source" "${destination}.new" || return 1
 mv -f "${destination}.new" "$destination"
+}
+
+install_geo_databases(){
+local database_dir=${GEO_DATABASE_DIR:-/root} asset tmp
+for asset in geoip geosite; do
+tmp=$(download_to_temp "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/${asset}.db" "$database_dir/${asset}.db") || return 1
+atomic_install "$tmp" "$database_dir/${asset}.db" 644 || { rm -f "$tmp"; return 1; }
+rm -f "$tmp"
+done
 }
 
 update_inbound_port(){
@@ -2642,8 +2663,9 @@ private_key=$(echo "$key_pair" | awk '/PrivateKey/ {print $2}' | tr -d '"')
 public_key=$(echo "$key_pair" | awk '/PublicKey/ {print $2}' | tr -d '"')
 echo "$public_key" > /etc/s-box/public.key
 short_id=$(/etc/s-box/sing-box generate rand --hex 4)
-wget -q -O /root/geoip.db https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.db
-wget -q -O /root/geosite.db https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.db
+if ! install_geo_databases; then
+red "GeoIP/GeoSite 下载或安装失败，已保留现有数据库" && return 1
+fi
 red "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
 green "五、自动生成warp-wireguard出站账户" && sleep 2
 warpwg
