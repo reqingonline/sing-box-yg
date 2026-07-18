@@ -11,3 +11,7 @@ if [ -d "$repo_root/tests/unit" ]; then
     bash "$test_file"
   done < <(find "$repo_root/tests/unit" -maxdepth 1 -type f -name 'test_*.sh' -print0 | sort -z)
 fi
+
+if [ -d "$repo_root/tests/integration" ]; then
+  bash "$repo_root/tests/integration/install-smoke.sh"
+fi
