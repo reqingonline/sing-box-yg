@@ -24,14 +24,29 @@ local UDP_PORT=$9
 local HOST=${10}
 local ARGO_DOMAIN=${11}
 local ARGO_AUTH=${12}
+local script_root keep_script
+script_root=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+keep_script="$script_root/serv00keep.sh"
+if [ ! -r "$keep_script" ]; then
+  echo "缺少本地 serv00keep.sh，拒绝从未校验的远程分支直接执行" >&2
+  return 1
+fi
   if [ -z "${ARGO_DOMAIN}" ]; then
     echo "Argo域名为空，申请Argo临时域名"
   else
     echo "Argo已设置固定域名：${ARGO_DOMAIN}"
   fi
-  remote_command="export reym=$REALITY UUID=$SUUID vless_port=$TCP1_PORT vmess_port=$TCP2_PORT hy2_port=$UDP_PORT reset=$RES resport=$REP ARGO_DOMAIN=${ARGO_DOMAIN} ARGO_AUTH=${ARGO_AUTH} && bash <(curl -Ls https://raw.githubusercontent.com/yonggekkk/sing-box-yg/main/serv00keep.sh)"
-  echo "Executing remote command on $HOST as $SSH_USER with command: $remote_command"
-  sshpass -p "$SSH_PASS" ssh -o StrictHostKeyChecking=no "$SSH_USER@$HOST" "$remote_command"
+  echo "正在安全部署 $HOST（敏感参数不会写入命令行或日志）"
+  {
+    printf 'export reym=%q UUID=%q vless_port=%q vmess_port=%q hy2_port=%q reset=%q resport=%q ARGO_DOMAIN=%q ARGO_AUTH=%q\n' \
+      "$REALITY" "$SUUID" "$TCP1_PORT" "$TCP2_PORT" "$UDP_PORT" "$RES" "$REP" "$ARGO_DOMAIN" "$ARGO_AUTH"
+    cat "$keep_script"
+  } | SSHPASS="$SSH_PASS" sshpass -e ssh -o StrictHostKeyChecking=accept-new "$SSH_USER@$HOST" 'bash -s'
+}
+sbyg_ssh() {
+  local password=$1
+  shift
+  SSHPASS="$password" sshpass -e ssh -o StrictHostKeyChecking=accept-new "$@"
 }
 if  cat /etc/issue /proc/version /etc/os-release 2>/dev/null | grep -q -E -i "openwrt"; then
 opkg update
@@ -73,14 +88,14 @@ echo "*****************************************************"
               HOST=$(echo $account | jq -r '.HOST')
               ARGO_DOMAIN=$(echo $account | jq -r '.ARGO_DOMAIN')
               ARGO_AUTH=$(echo $account | jq -r '.ARGO_AUTH') 
-          if sshpass -p "$SSH_PASS" ssh -o StrictHostKeyChecking=no "$SSH_USER@$HOST" -q exit; then
+          if sbyg_ssh "$SSH_PASS" "$SSH_USER@$HOST" -q exit; then
             echo "🎉恭喜！✅第【$count】台服务器连接成功！🚀服务器地址：$HOST ，账户名：$SSH_USER"   
           if [ -z "${ARGO_DOMAIN}" ]; then
            check_process="ps aux | grep '[c]onfig' > /dev/null && ps aux | grep [l]ocalhost:$TCP2_PORT > /dev/null"
             else
-           check_process="ps aux | grep '[c]onfig' > /dev/null && ps aux | grep '[t]oken $ARGO_AUTH' > /dev/null"
+           check_process="ps aux | grep '[c]onfig' > /dev/null && ps aux | grep '[c]loudflared.*tunnel' > /dev/null"
            fi
-          if ! sshpass -p "$SSH_PASS" ssh -o StrictHostKeyChecking=no "$SSH_USER@$HOST" "$check_process" || [[ "$RES" =~ ^[Yy]$ ]]; then
+          if ! sbyg_ssh "$SSH_PASS" "$SSH_USER@$HOST" "$check_process" || [[ "$RES" =~ ^[Yy]$ ]]; then
             echo "⚠️检测到主进程或者argo进程未启动，或者执行重置"
              echo "⚠️现在开始修复或重置部署……请稍等"
              output=$(run_remote_command "$RES" "$REP" "$SSH_USER" "$SSH_PASS" "${REALITY}" "$SUUID" "$TCP1_PORT" "$TCP2_PORT" "$UDP_PORT" "$HOST" "${ARGO_DOMAIN}" "${ARGO_AUTH}")
@@ -88,7 +103,7 @@ echo "*****************************************************"
           else
             echo "🎉恭喜！✅检测到所有进程正常运行中 "
             SSH_USER_LOWER=$(echo "$SSH_USER" | tr '[:upper:]' '[:lower:]')
-            sshpass -p "$SSH_PASS" ssh -o StrictHostKeyChecking=no "$SSH_USER@$HOST" "
+            sbyg_ssh "$SSH_PASS" "$SSH_USER@$HOST" "
             echo \"配置显示如下：\"
             cat domains/${SSH_USER_LOWER}.serv00.net/logs/list.txt
             echo \"====================================================\""

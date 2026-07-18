@@ -9,6 +9,9 @@ source "$repo_root/lib/source.sh"
 source "$repo_root/lib/download.sh"
 source "$repo_root/lib/secrets.sh"
 
+[ "$(sbyg_version_triplet v1.14.0-alpha.27)" = '1 14 0' ]
+sbyg_version_at_least v1.14.0-alpha.27 v1.14.0
+
 test "$SBYG_REPOSITORY" = "reqingonline/sing-box-yg"
 test "$(sbyg_raw_url main sb.sh)" = \
   "https://raw.githubusercontent.com/reqingonline/sing-box-yg/main/sb.sh"

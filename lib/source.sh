@@ -5,6 +5,22 @@ SBYG_REPOSITORY=${SBYG_REPOSITORY:-reqingonline/sing-box-yg}
 SBYG_CHANNEL=${SBYG_CHANNEL:-stable}
 SBYG_GITHUB_API=${SBYG_GITHUB_API:-https://api.github.com}
 
+sbyg_current_ref() {
+  if [ -n "${SBYG_REF:-}" ]; then
+    printf '%s\n' "$SBYG_REF"
+  elif [ -r /etc/s-box/release-ref ]; then
+    IFS= read -r SBYG_INSTALLED_REF < /etc/s-box/release-ref
+    sbyg_validate_ref "$SBYG_INSTALLED_REF" || return
+    printf '%s\n' "$SBYG_INSTALLED_REF"
+  else
+    printf 'main\n'
+  fi
+}
+
+sbyg_project_file_url() {
+  sbyg_raw_url "$(sbyg_current_ref)" "$1"
+}
+
 sbyg_validate_ref() {
   case ${1-} in
     ''|*[!A-Za-z0-9._/-]*|*..*|/*|*/)
@@ -52,6 +68,8 @@ sbyg_release_asset_url() {
 
 sbyg_version_triplet() {
   local version=${1#v}
+  version=${version%%+*}
+  version=${version%%-*}
   case $version in
     *[!0-9.]*|*.*.*.*|.*|*.|*..*) return 2 ;;
   esac

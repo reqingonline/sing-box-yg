@@ -23,10 +23,20 @@ return 0
 done
 return 1
 }
-for sbyg_library in source download secrets transaction firewall subscription service; do
+for sbyg_library in source download secrets transaction firewall subscription service config; do
 sbyg_load_library "$sbyg_library" || true
 done
 declare -F sbyg_secure_defaults >/dev/null 2>&1 && sbyg_secure_defaults /etc/s-box
+sbyg_installed_core_version(){
+${SING_BOX_BIN:-/etc/s-box/sing-box} version 2>/dev/null | awk '/version/{print $NF; exit}'
+}
+sbyg_refresh_active_config(){
+local core_version template
+declare -F sbyg_config_prepare >/dev/null 2>&1 || return 1
+core_version=$(sbyg_installed_core_version) || return 1
+template=$(sbyg_config_template_name "$core_version") || return 1
+sbyg_config_prepare "/etc/s-box/$template" /etc/s-box/sb.json "$core_version"
+}
 [[ $EUID -ne 0 ]] && yellow "请以root模式运行脚本" && exit
 stty erase $'\b' 2>/dev/null || stty erase '^H' 2>/dev/null
 #[[ -e /etc/hosts ]] && grep -qE '^ *172.65.251.78 gitlab.com' /etc/hosts || echo -e '\n172.65.251.78 gitlab.com' >> /etc/hosts
@@ -251,8 +261,9 @@ done
 }
 
 update_sbyg_version(){
-local destination=${SBYG_VERSION_FILE:-/etc/s-box/v} tmp version version_file
-tmp=$(download_to_temp https://raw.githubusercontent.com/yonggekkk/sing-box-yg/main/version "$destination") || return 1
+local destination=${SBYG_VERSION_FILE:-/etc/s-box/v} tmp version version_file version_url
+version_url=$(sbyg_project_file_url version) || return 1
+tmp=$(download_to_temp "$version_url" "$destination") || return 1
 version=$(awk -F "更新内容" 'NR == 1 {print $1}' "$tmp" | sed 's/[[:space:]]*$//')
 rm -f "$tmp"
 test -n "$version" || return 1
@@ -1019,8 +1030,7 @@ cat > /etc/s-box/sb11.json <<EOF
 }
 }
 EOF
-[[ "$sbnh" == "1.10" ]] && num=10 || num=11
-cp /etc/s-box/sb${num}.json /etc/s-box/sb.json
+sbyg_refresh_active_config || { red "Unable to render a configuration for the installed core"; return 1; }
 }
 
 sbservice(){
@@ -3972,6 +3982,10 @@ restart_service_checked
 }
 
 restartsb(){
+if declare -F sbyg_refresh_active_config >/dev/null 2>&1 && ! sbyg_refresh_active_config; then
+restore_config
+return 1
+fi
 if ! checksb; then
 restore_config && red "已恢复最后一次可用配置"
 return 1
@@ -4033,22 +4047,15 @@ rm /tmp/crontab.tmp
 }
 
 lnsb(){
-local tmp
-tmp=$(download_to_temp https://raw.githubusercontent.com/yonggekkk/sing-box-yg/main/sb.sh /usr/bin/sb) || { red "脚本下载失败，已保留当前版本"; return 1; }
-if ! bash -n "$tmp"; then
-rm -f "$tmp"
-red "脚本校验失败，已保留当前版本"
-return 1
-fi
-atomic_install "$tmp" /usr/bin/sb 755 || { rm -f "$tmp"; red "脚本更新失败，已保留当前版本"; return 1; }
-rm -f "$tmp"
+local installer=/usr/local/lib/sing-box-yg/install.sh
+[[ -x "$installer" ]] || { red "未找到校验型安装器，请先迁移到稳定版安装方式"; return 1; }
+"$installer" --channel stable --upgrade
 }
 
 upsbyg(){
 if [[ ! -f '/usr/bin/sb' ]]; then
 red "未正常安装Sing-box-yg" && exit
 fi
-lnsb
 if ! lnsb; then
 red "Sing-box-yg安装脚本升级失败，已保留当前版本" && return 1
 fi
@@ -4102,7 +4109,7 @@ fi
 if install_sing_box_core "$upcore"; then
 sbnh=$(/etc/s-box/sing-box version 2>/dev/null | awk '/version/{print $NF}' 2>/dev/null | cut -d '.' -f 1,2)
 [[ "$sbnh" == "1.10" ]] && num=10 || num=11
-if ! atomic_install "/etc/s-box/sb${num}.json" /etc/s-box/sb.json 600; then
+if ! sbyg_config_prepare "/etc/s-box/sb${num}.json" /etc/s-box/sb.json "$upcore"; then
 $transaction_ready && sbyg_transaction_rollback "$transaction_state" /etc/s-box/sb.json /etc/s-box/sing-box >/dev/null 2>&1
 red "Unable to install the candidate configuration"
 return 1
@@ -4166,7 +4173,7 @@ sbyg_fw_remove_all >/dev/null 2>&1 || true
 sbyg_fw_persist >/dev/null 2>&1 || true
 green "Sing-box卸载完成！"
 blue "原配置和项目数据已移至可恢复目录：$recovery_root"
-blue "欢迎继续使用Sing-box-yg脚本：bash <(curl -Ls https://raw.githubusercontent.com/yonggekkk/sing-box-yg/main/sb.sh)"
+blue "欢迎继续使用Sing-box-yg脚本：https://github.com/reqingonline/sing-box-yg/releases/latest"
 echo
 }
 
@@ -4387,6 +4394,8 @@ fi
 }
 
 inssbwpph(){
+red "WARP-plus 二进制来源无法独立验证，此功能已停用；现有 sing-box WireGuard/WARP 功能不受影响"
+return 1
 sbactive
 ins(){
 if [ ! -e /etc/s-box/sbwpph ]; then
@@ -4394,9 +4403,8 @@ case $(uname -m) in
 aarch64) cpu=arm64;;
 x86_64) cpu=amd64;;
 esac
-tmp=$(download_to_temp https://raw.githubusercontent.com/yonggekkk/sing-box-yg/main/sbwpph_$cpu /etc/s-box/sbwpph) || { red "WARP-plus下载失败"; return 1; }
-atomic_install "$tmp" /etc/s-box/sbwpph 755 || { rm -f "$tmp"; red "WARP-plus安装失败"; return 1; }
-rm -f "$tmp"
+red "WARP-plus 安装已停用"
+return 1
 fi
 ps -ef | grep '[s]bwpph' | awk '{print $2}' | xargs kill 2>/dev/null
 v4v6
@@ -4573,7 +4581,7 @@ green "10. 查看 Sing-box 运行日志"
 green "11. 一键原版BBR+FQ加速"
 green "12. 管理 Acme 申请域名IP证书"
 green "13. 管理 Warp 查看Netflix/ChatGPT解锁情况"
-green "14. 添加 WARP-plus-Socks5 代理模式 【本地Warp/多地区Psiphon-VPN】"
+yellow "14. WARP-plus-Socks5 已停用（原二进制缺少可验证来源）"
 green "15. 更换IP刷新本地IP、调整IPV4/IPV6配置输出"
 white "----------------------------------------------------------------------------------"
 green "16. Sing-box-yg脚本使用说明书"
@@ -4581,14 +4589,14 @@ white "-------------------------------------------------------------------------
 green " 0. 退出脚本"
 red "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
 insV=$(cat /etc/s-box/v 2>/dev/null)
-latestV=$(curl -sL https://raw.githubusercontent.com/yonggekkk/sing-box-yg/main/version | awk -F "更新内容" '{print $1}' | head -n 1)
+latestV=$(curl -sL https://raw.githubusercontent.com/reqingonline/sing-box-yg/main/version | awk -F "更新内容" '{print $1}' | head -n 1)
 if [ -f /etc/s-box/v ]; then
 if [ "$insV" = "$latestV" ]; then
 echo -e "当前 Sing-box-yg 脚本最新版：${bblue}${insV}${plain} (已安装)"
 else
 echo -e "当前 Sing-box-yg 脚本版本号：${bblue}${insV}${plain}"
 echo -e "检测到最新 Sing-box-yg 脚本版本号：${yellow}${latestV}${plain} (可选择7进行更新)"
-echo -e "${yellow}$(curl -sL https://raw.githubusercontent.com/yonggekkk/sing-box-yg/main/version)${plain}"
+echo -e "${yellow}$(curl -sL https://raw.githubusercontent.com/reqingonline/sing-box-yg/main/version)${plain}"
 fi
 else
 echo -e "当前 Sing-box-yg 脚本版本号：${bblue}${latestV}${plain}"
