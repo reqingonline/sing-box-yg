@@ -3,6 +3,11 @@
 These checks complement the fast shell tests in `tests/`.  Run them only on a
 disposable VPS, after a normal installation has completed successfully.
 
+The acceptance flow is split into `capture-baseline.sh`,
+`release-acceptance.sh`, `failure-injection.sh`, and `cleanup-verify.sh`.
+Each destructive phase requires explicit `SBYG_ACCEPTANCE_*` paths; none of
+these helpers flushes a firewall or recursively targets a home directory.
+
 ```bash
 bash tests/run.sh
 bash tests/vps/run-distribution-matrix.sh
