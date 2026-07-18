@@ -12,6 +12,19 @@ yellow(){ echo -e "\033[33m\033[01m$1\033[0m";}
 blue(){ echo -e "\033[36m\033[01m$1\033[0m";}
 white(){ echo -e "\033[37m\033[01m$1\033[0m";}
 readp(){ read -p "$(yellow "$1")" $2;}
+sbyg_load_library(){
+local name=$1 root script_root
+script_root=$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)
+for root in "${SBYG_LIB_DIR:-}" /usr/lib/sing-box-yg /etc/s-box/lib "$script_root/lib"; do
+[[ -n "$root" && -r "$root/$name.sh" ]] || continue
+. "$root/$name.sh"
+return 0
+done
+return 1
+}
+for sbyg_library in source download secrets transaction; do
+sbyg_load_library "$sbyg_library" || true
+done
 [[ $EUID -ne 0 ]] && yellow "请以root模式运行脚本" && exit
 stty erase $'\b' 2>/dev/null || stty erase '^H' 2>/dev/null
 #[[ -e /etc/hosts ]] && grep -qE '^ *172.65.251.78 gitlab.com' /etc/hosts || echo -e '\n172.65.251.78 gitlab.com' >> /etc/hosts
@@ -3965,20 +3978,33 @@ done
 $restored
 }
 
+restart_service_checked(){
+if command -v apk >/dev/null 2>&1; then
+rc-service sing-box restart || return 1
+rc-service sing-box status >/dev/null 2>&1 || return 1
+else
+systemctl enable sing-box >/dev/null 2>&1 || return 1
+systemctl restart sing-box || return 1
+systemctl is-active --quiet sing-box || return 1
+fi
+}
+
+rollback_service_config(){
+restore_config || return 1
+checksb || return 1
+restart_service_checked
+}
+
 restartsb(){
 if ! checksb; then
 restore_config && red "已恢复最后一次可用配置"
 return 1
 fi
-if command -v apk >/dev/null 2>&1; then
-rc-service sing-box restart
-rc-service sing-box status >/dev/null 2>&1
-else
-systemctl enable sing-box
-systemctl restart sing-box
-systemctl is-active --quiet sing-box
+if ! restart_service_checked; then
+rollback_service_config >/dev/null 2>&1
+return 1
 fi
-snapshot_config
+snapshot_config || return 1
 }
 
 stclre(){
@@ -4085,12 +4111,30 @@ sb
 fi
 if [[ -n $upcore ]]; then
 green "开始下载并更新Sing-box内核……请稍等"
+transaction_state=/etc/s-box/.transaction
+transaction_ready=false
+if declare -F sbyg_transaction_begin >/dev/null 2>&1; then
+sbyg_transaction_begin "$transaction_state" /etc/s-box/sb.json /etc/s-box/sing-box || { red "Unable to create a safe update snapshot"; return 1; }
+transaction_ready=true
+fi
 if install_sing_box_core "$upcore"; then
 sbnh=$(/etc/s-box/sing-box version 2>/dev/null | awk '/version/{print $NF}' 2>/dev/null | cut -d '.' -f 1,2)
 [[ "$sbnh" == "1.10" ]] && num=10 || num=11
-rm -rf /etc/s-box/sb.json
-cp /etc/s-box/sb${num}.json /etc/s-box/sb.json
-restartsb && sbshare > /dev/null 2>&1
+if ! atomic_install "/etc/s-box/sb${num}.json" /etc/s-box/sb.json 600; then
+$transaction_ready && sbyg_transaction_rollback "$transaction_state" /etc/s-box/sb.json /etc/s-box/sing-box >/dev/null 2>&1
+red "Unable to install the candidate configuration"
+return 1
+fi
+if $transaction_ready; then
+if ! sbyg_transaction_apply "$transaction_state" /etc/s-box/sb.json /etc/s-box/sing-box; then
+red "Core update failed health checks and was rolled back"
+return 1
+fi
+snapshot_config || return 1
+else
+restartsb || return 1
+fi
+sbshare > /dev/null 2>&1
 blue "成功升级/切换 Sing-box 内核版本：$(/etc/s-box/sing-box version | awk '/version/{print $NF}')" && sleep 3 && sb
 else
 red "核心下载、校验或安装失败，已保留当前版本" && upsbcroe
