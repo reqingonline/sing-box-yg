@@ -22,7 +22,7 @@ return 0
 done
 return 1
 }
-for sbyg_library in source download secrets transaction; do
+for sbyg_library in source download secrets transaction firewall; do
 sbyg_load_library "$sbyg_library" || true
 done
 [[ $EUID -ne 0 ]] && yellow "请以root模式运行脚本" && exit
@@ -200,24 +200,9 @@ fi
 }
 
 close(){
-systemctl stop firewalld.service >/dev/null 2>&1
-systemctl disable firewalld.service >/dev/null 2>&1
-setenforce 0 >/dev/null 2>&1
-ufw disable >/dev/null 2>&1
-iptables -P INPUT ACCEPT >/dev/null 2>&1
-iptables -P FORWARD ACCEPT >/dev/null 2>&1
-iptables -P OUTPUT ACCEPT >/dev/null 2>&1
-iptables -t mangle -F >/dev/null 2>&1
-iptables -F >/dev/null 2>&1
-iptables -X >/dev/null 2>&1
-netfilter-persistent save >/dev/null 2>&1
-if [[ -n $(apachectl -v 2>/dev/null) ]]; then
-systemctl stop httpd.service >/dev/null 2>&1
-systemctl disable httpd.service >/dev/null 2>&1
-service apache2 stop >/dev/null 2>&1
-systemctl disable apache2 >/dev/null 2>&1
-fi
-sleep 1
+yellow "Compatibility mode no longer disables the host firewall or web services."
+firewall_hint
+return 0
 green "兼容模式已关闭系统防火墙，请自行确认 VPS 后台安全组和端口暴露"
 }
 
@@ -2849,8 +2834,8 @@ vm_port=$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[1].listen_port')
 hy2_port=$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[2].listen_port')
 tu5_port=$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[3].listen_port')
 an_port=$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[4].listen_port')
-hy2_ports=$(iptables -t nat -nL --line 2>/dev/null | grep -w "$hy2_port" | awk '{print $8}' | sed 's/dpts://; s/dpt://' | tr '\n' ',' | sed 's/,$//')
-tu5_ports=$(iptables -t nat -nL --line 2>/dev/null | grep -w "$tu5_port" | awk '{print $8}' | sed 's/dpts://; s/dpt://' | tr '\n' ',' | sed 's/,$//')
+hy2_ports=$(sbyg_fw_list_udp_sources "$hy2_port" | tr '\n' ',' | sed 's/,$//')
+tu5_ports=$(sbyg_fw_list_udp_sources "$tu5_port" | tr '\n' ',' | sed 's/,$//')
 [[ -n $hy2_ports ]] && hy2zfport="$hy2_ports" || hy2zfport="未添加"
 [[ -n $tu5_ports ]] && tu5zfport="$tu5_ports" || tu5zfport="未添加"
 }
@@ -2864,10 +2849,8 @@ if [[ $rangeport =~ ^([1-9][0-9]{3,4}:[1-9][0-9]{3,4})$ ]]; then
 b=${rangeport%%:*}
 c=${rangeport##*:}
 if [[ $b -ge 1000 && $b -le 65535 && $c -ge 1000 && $c -le 65535 && $b -lt $c ]]; then
-iptables -t nat -A PREROUTING -p udp --dport $rangeport -j DNAT --to-destination :$port
-ip6tables -t nat -A PREROUTING -p udp --dport $rangeport -j DNAT --to-destination :$port
-netfilter-persistent save >/dev/null 2>&1
-service iptables save >/dev/null 2>&1
+sbyg_fw_add_udp_dnat "$rangeport" "$port" || { red "Unable to add the owned forwarding rule"; return 1; }
+sbyg_fw_persist >/dev/null 2>&1 || true
 blue "已确认转发的端口范围：$rangeport"
 else
 red "输入的端口范围不在有效范围内" && fports
@@ -2880,10 +2863,8 @@ echo
 fport(){
 readp "\n请输入一个转发的端口 (1000-65535范围内)：" onlyport
 if [[ $onlyport -ge 1000 && $onlyport -le 65535 ]]; then
-iptables -t nat -A PREROUTING -p udp --dport $onlyport -j DNAT --to-destination :$port
-ip6tables -t nat -A PREROUTING -p udp --dport $onlyport -j DNAT --to-destination :$port
-netfilter-persistent save >/dev/null 2>&1
-service iptables save >/dev/null 2>&1
+sbyg_fw_add_udp_dnat "$onlyport" "$port" || { red "Unable to add the owned forwarding rule"; return 1; }
+sbyg_fw_persist >/dev/null 2>&1 || true
 blue "已确认转发的端口：$onlyport"
 else
 blue "输入的端口不在有效范围内" && fport
@@ -2896,22 +2877,18 @@ allports
 hy2_ports=$(echo "$hy2_ports" | sed 's/,/,/g')
 IFS=',' read -ra ports <<< "$hy2_ports"
 for port in "${ports[@]}"; do
-iptables -t nat -D PREROUTING -p udp --dport $port -j DNAT --to-destination :$hy2_port
-ip6tables -t nat -D PREROUTING -p udp --dport $port -j DNAT --to-destination :$hy2_port
+sbyg_fw_remove_udp_dnat "$port" "$hy2_port" || true
 done
-netfilter-persistent save >/dev/null 2>&1
-service iptables save >/dev/null 2>&1
+sbyg_fw_persist >/dev/null 2>&1 || true
 }
 tu5deports(){
 allports
 tu5_ports=$(echo "$tu5_ports" | sed 's/,/,/g')
 IFS=',' read -ra ports <<< "$tu5_ports"
 for port in "${ports[@]}"; do
-iptables -t nat -D PREROUTING -p udp --dport $port -j DNAT --to-destination :$tu5_port
-ip6tables -t nat -D PREROUTING -p udp --dport $port -j DNAT --to-destination :$tu5_port
+sbyg_fw_remove_udp_dnat "$port" "$tu5_port" || true
 done
-netfilter-persistent save >/dev/null 2>&1
-service iptables save >/dev/null 2>&1
+sbyg_fw_persist >/dev/null 2>&1 || true
 }
 
 allports
@@ -4164,9 +4141,8 @@ kill -15 $(pgrep -f 'websbox' 2>/dev/null) >/dev/null 2>&1
 rm -rf /etc/s-box sbyg_update /usr/bin/sb /root/geoip.db /root/geosite.db /root/warpapi /root/warpip /root/websbox
 rm -f /etc/local.d/alpineargo.start /etc/local.d/alpinesub.start /etc/local.d/alpinews5.start
 uncronsb
-iptables -t nat -F PREROUTING >/dev/null 2>&1
-netfilter-persistent save >/dev/null 2>&1
-service iptables save >/dev/null 2>&1
+sbyg_fw_remove_all >/dev/null 2>&1 || true
+sbyg_fw_persist >/dev/null 2>&1 || true
 green "Sing-box卸载完成！"
 blue "欢迎继续使用Sing-box-yg脚本：bash <(curl -Ls https://raw.githubusercontent.com/yonggekkk/sing-box-yg/main/sb.sh)"
 echo
