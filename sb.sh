@@ -169,20 +169,20 @@ fi
 fi
 fi
 v4v6(){
-v4=$(curl -s4m5 icanhazip.com -k)
-v6=$(curl -s6m5 icanhazip.com -k)
-v4dq=$(curl -s4m5 -k https://myip.ipip.net | awk -F'来自于：' '{print $2}' 2>/dev/null)
-#v4dq=$(curl -s4m5 -k https://ip.fm | sed -n 's/.*Location: //p' 2>/dev/null)
-v6dq=$(curl -s6m5 -k https://ip.fm | sed -n 's/.*Location: //p' 2>/dev/null)
+v4=$(curl -fsS4m5 https://icanhazip.com)
+v6=$(curl -fsS6m5 https://icanhazip.com)
+v4dq=$(curl -fsS4m5 https://myip.ipip.net | awk -F'来自于：' '{print $2}' 2>/dev/null)
+#v4dq=$(curl -fsS4m5 https://ip.fm | sed -n 's/.*Location: //p' 2>/dev/null)
+v6dq=$(curl -fsS6m5 https://ip.fm | sed -n 's/.*Location: //p' 2>/dev/null)
 }
 warpcheck(){
-wgcfv6=$(curl -s6m5 https://www.cloudflare.com/cdn-cgi/trace -k | grep warp | cut -d= -f2)
-wgcfv4=$(curl -s4m5 https://www.cloudflare.com/cdn-cgi/trace -k | grep warp | cut -d= -f2)
+wgcfv6=$(curl -fsS6m5 https://www.cloudflare.com/cdn-cgi/trace | grep warp | cut -d= -f2)
+wgcfv4=$(curl -fsS4m5 https://www.cloudflare.com/cdn-cgi/trace | grep warp | cut -d= -f2)
 }
 
 v6(){
 v4orv6(){
-if [ -z "$(curl -s4m5 icanhazip.com -k)" ]; then
+if [ -z "$(curl -fsS4m5 https://icanhazip.com)" ]; then
 echo
 red "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
 yellow "检测到 纯IPV6 VPS，添加NAT64"
@@ -191,7 +191,7 @@ ipv=prefer_ipv6
 else
 ipv=prefer_ipv4
 fi
-if [ -n "$(curl -s6m5 icanhazip.com -k)" ]; then
+if [ -n "$(curl -fsS6m5 https://icanhazip.com)" ]; then
 endip="2606:4700:d0::a29f:c001"
 else
 endip="162.159.192.1"
@@ -251,12 +251,30 @@ install -m "$mode" "$source" "${destination}.new" || return 1
 mv -f "${destination}.new" "$destination"
 }
 
-install_geo_databases(){
-local database_dir=${GEO_DATABASE_DIR:-/root} asset tmp
-for asset in geoip geosite; do
-tmp=$(download_to_temp "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/${asset}.db" "$database_dir/${asset}.db") || return 1
-atomic_install "$tmp" "$database_dir/${asset}.db" 644 || { rm -f "$tmp"; return 1; }
+install_github_latest_asset(){
+local repository=$1 asset=$2 destination=$3 mode=${4:-755} api tmp expected url actual
+api=$(mktemp) || return 1
+curl --fail --location --retry 2 --connect-timeout 10 --max-time 30 --proto '=https' \
+  -o "$api" "https://api.github.com/repos/$repository/releases/latest" || { rm -f "$api"; return 1; }
+expected=$(jq -r --arg name "$asset" '.assets[] | select(.name == $name) | .digest // empty' "$api")
+url=$(jq -r --arg name "$asset" '.assets[] | select(.name == $name) | .browser_download_url // empty' "$api")
+rm -f "$api"
+[[ "$expected" == sha256:* && "$url" == https://* ]] || return 1
+tmp=$(download_to_temp "$url" "$destination") || return 1
+actual=$(sha256sum "$tmp" | awk '{print $1}')
+if [ "$actual" != "${expected#sha256:}" ]; then
 rm -f "$tmp"
+red "下载校验失败：$asset"
+return 1
+fi
+atomic_install "$tmp" "$destination" "$mode" || { rm -f "$tmp"; return 1; }
+rm -f "$tmp"
+}
+
+install_geo_databases(){
+local database_dir=${GEO_DATABASE_DIR:-/root} asset
+for asset in geoip geosite; do
+install_github_latest_asset MetaCubeX/meta-rules-dat "${asset}.db" "$database_dir/${asset}.db" 644 || return 1
 done
 }
 
@@ -460,7 +478,9 @@ readp "请选择【1-2】：" menu
 if [ -z "$menu" ] || [ "$menu" = "1" ] ; then
 zqzs
 else
-bash <(curl -Ls https://raw.githubusercontent.com/yonggekkk/acme-yg/main/acme.sh)
+red "为避免执行未经校验的远程脚本，内置 ACME 一键安装已停用；继续使用自签证书"
+zqzs
+return 0
 if [[ ! -f /root/ygkkkca/cert.crt && ! -f /root/ygkkkca/private.key && ! -s /root/ygkkkca/cert.crt && ! -s /root/ygkkkca/private.key ]]; then
 red "Acme证书申请失败，继续使用自签证书" 
 zqzs
@@ -524,10 +544,10 @@ ports=()
 for i in {1..5}; do
 while true; do
 port=$(shuf -i 10000-65535 -n 1)
-if ! [[ " ${ports[@]} " =~ " $port " ]] && \
+if ! [[ " ${ports[*]} " =~ " $port " ]] && \
 [[ -z $(ss -tunlp | grep -w tcp | awk '{print $5}' | sed 's/.*://g' | grep -w "$port") ]] && \
 [[ -z $(ss -tunlp | grep -w udp | awk '{print $5}' | sed 's/.*://g' | grep -w "$port") ]]; then
-ports+=($port)
+ports+=("$port")
 break
 fi
 done
@@ -1077,7 +1097,7 @@ echo "$server_ipcl" > /etc/s-box/server_ipcl.log
 fi
 else
 yellow "VPS并不是双栈VPS，不支持IP配置输出的切换"
-serip=$(curl -s4m5 icanhazip.com -k || curl -s6m5 icanhazip.com -k)
+serip=$(curl -fsS4m5 https://icanhazip.com || curl -fsS6m5 https://icanhazip.com)
 if [[ "$serip" =~ : ]]; then
 server_ip="[$serip]"
 echo "$server_ip" > /etc/s-box/server_ip.log
@@ -1883,7 +1903,7 @@ $(sbany1)
         "vmess-tls-argo临时-$hostname",
         "vmess-argo临时-$hostname"
             ],
-            "url": "http://www.gstatic.com/generate_204",
+            "url": "https://www.gstatic.com/generate_204",
             "interval": "10m",
             "tolerance": 50
         },
@@ -2105,7 +2125,7 @@ $(sbany1)
         "vmess-tls-argo临时-$hostname",
         "vmess-argo临时-$hostname"
             ],
-            "url": "http://www.gstatic.com/generate_204",
+            "url": "https://www.gstatic.com/generate_204",
             "interval": "10m",
             "tolerance": 50
         },
@@ -2295,7 +2315,7 @@ $(sbany1)
         "vmess-tls-argo固定-$hostname",
         "vmess-argo固定-$hostname"
             ],
-            "url": "http://www.gstatic.com/generate_204",
+            "url": "https://www.gstatic.com/generate_204",
             "interval": "10m",
             "tolerance": 50
         },
@@ -2425,7 +2445,7 @@ $(sbany1)
         "hy2-$hostname",
         "tuic5-$hostname"
             ],
-            "url": "http://www.gstatic.com/generate_204",
+            "url": "https://www.gstatic.com/generate_204",
             "interval": "10m",
             "tolerance": 50
         },
@@ -2513,9 +2533,7 @@ case $(uname -m) in
 aarch64) cpu=arm64;;
 x86_64) cpu=amd64;;
 esac
-tmp=$(download_to_temp https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-$cpu /etc/s-box/cloudflared) || { red "cloudflared下载失败"; return 1; }
-atomic_install "$tmp" /etc/s-box/cloudflared 755 || { rm -f "$tmp"; red "cloudflared安装失败"; return 1; }
-rm -f "$tmp"
+install_github_latest_asset cloudflare/cloudflared "cloudflared-linux-$cpu" /etc/s-box/cloudflared 755 || { red "cloudflared下载或校验失败"; return 1; }
 fi
 }
 
@@ -3591,8 +3609,8 @@ fi
 sbymfl(){
 sbport=$(cat /etc/s-box/sbwpph.log 2>/dev/null | awk '{print $3}' | awk -F":" '{print $NF}') 
 sbport=${sbport:-'40000'}
-resv1=$(curl -sm3 --socks5 localhost:$sbport icanhazip.com)
-resv2=$(curl -sm3 -x socks5h://localhost:$sbport icanhazip.com)
+resv1=$(curl -fsSm3 --socks5 localhost:$sbport https://icanhazip.com)
+resv2=$(curl -fsSm3 -x socks5h://localhost:$sbport https://icanhazip.com)
 if [[ -z $resv1 && -z $resv2 ]]; then
 warp_s4_ip='Socks5-IPV4未启动，黑名单模式'
 warp_s6_ip='Socks5-IPV6未启动，黑名单模式'
@@ -4261,19 +4279,19 @@ fi
 }
 
 acme(){
-#bash <(curl -Ls https://gitlab.com/rwkgyg/acme-script/raw/main/acme.sh)
-bash <(curl -Ls https://raw.githubusercontent.com/yonggekkk/acme-yg/main/acme.sh)
+red "ACME 外部脚本入口已停用；请使用系统软件源中的 certbot/acme.sh，并手工导入证书"
+return 1
 }
 cfwarp(){
-#bash <(curl -Ls https://gitlab.com/rwkgyg/CFwarp/raw/main/CFwarp.sh)
-bash <(curl -Ls https://raw.githubusercontent.com/yonggekkk/warp-yg/main/CFwarp.sh)
+red "外部 WARP 管理脚本入口已停用；sing-box 内置 WireGuard/WARP 出站不受影响"
+return 1
 }
 bbr(){
 if [[ $vi =~ lxc|openvz ]]; then
 yellow "当前VPS的架构为 $vi，不支持开启原版BBR加速" && sleep 2 && exit 
 else
-green "点击任意键，即可开启BBR加速，ctrl+c退出"
-bash <(curl -Ls https://raw.githubusercontent.com/teddysun/across/master/bbr.sh)
+red "外部 BBR 脚本入口已停用；请通过发行版内核和 /etc/sysctl.d 单独启用 BBR"
+return 1
 fi
 }
 
@@ -4471,8 +4489,8 @@ if [ "$menu" = "1" ]; then
 ins
 nohup /etc/s-box/sbwpph -b 127.0.0.1:$port -$sw46 --endpoint 162.159.192.1:2408 >/dev/null 2>&1 &
 green "申请IP中……请稍等……" && sleep 20
-resv1=$(curl -sm3 --socks5 localhost:$port icanhazip.com)
-resv2=$(curl -sm3 -x socks5h://localhost:$port icanhazip.com)
+resv1=$(curl -fsSm3 --socks5 localhost:$port https://icanhazip.com)
+resv2=$(curl -fsSm3 -x socks5h://localhost:$port https://icanhazip.com)
 if [[ -z $resv1 && -z $resv2 ]]; then
 red "WARP-plus-Socks5的IP获取失败" && unins && exit
 else
@@ -4519,8 +4537,8 @@ echo '
 readp "可选择国家地区（输入末尾两个大写字母，如美国，则输入US）：" guojia
 nohup /etc/s-box/sbwpph -b 127.0.0.1:$port --cfon --country $guojia -$sw46 --endpoint 162.159.192.1:2408 >/dev/null 2>&1 &
 green "申请IP中……请稍等……" && sleep 20
-resv1=$(curl -sm3 --socks5 localhost:$port icanhazip.com)
-resv2=$(curl -sm3 -x socks5h://localhost:$port icanhazip.com)
+resv1=$(curl -fsSm3 --socks5 localhost:$port https://icanhazip.com)
+resv2=$(curl -fsSm3 -x socks5h://localhost:$port https://icanhazip.com)
 if [[ -z $resv1 && -z $resv2 ]]; then
 red "WARP-plus-Socks5的IP获取失败，尝试换个国家地区吧" && unins && exit
 else
@@ -4541,7 +4559,7 @@ green "关注甬哥YouTube频道：https://youtube.com/@ygkkk?sub_confirmation=1
 echo
 blue "sing-box-yg脚本视频教程：https://www.youtube.com/playlist?list=PLMgly2AulGG_Affv6skQXWnVqw7XWiPwJ"
 echo
-blue "sing-box-yg脚本博客说明：http://ygkkk.blogspot.com/2023/10/sing-box-yg.html"
+blue "sing-box-yg脚本博客说明：https://ygkkk.blogspot.com/2023/10/sing-box-yg.html"
 echo
 blue "sing-box-yg脚本项目地址：https://github.com/yonggekkk/sing-box-yg"
 echo
@@ -4589,14 +4607,15 @@ white "-------------------------------------------------------------------------
 green " 0. 退出脚本"
 red "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
 insV=$(cat /etc/s-box/v 2>/dev/null)
-latestV=$(curl -sL https://raw.githubusercontent.com/reqingonline/sing-box-yg/main/version | awk -F "更新内容" '{print $1}' | head -n 1)
+latest_content=$(curl --fail --silent --show-error --location --proto '=https' "$(sbyg_project_file_url version)" 2>/dev/null || true)
+latestV=$(printf '%s\n' "$latest_content" | awk -F "更新内容" '{print $1}' | head -n 1)
 if [ -f /etc/s-box/v ]; then
 if [ "$insV" = "$latestV" ]; then
 echo -e "当前 Sing-box-yg 脚本最新版：${bblue}${insV}${plain} (已安装)"
 else
 echo -e "当前 Sing-box-yg 脚本版本号：${bblue}${insV}${plain}"
 echo -e "检测到最新 Sing-box-yg 脚本版本号：${yellow}${latestV}${plain} (可选择7进行更新)"
-echo -e "${yellow}$(curl -sL https://raw.githubusercontent.com/reqingonline/sing-box-yg/main/version)${plain}"
+echo -e "${yellow}${latest_content}${plain}"
 fi
 else
 echo -e "当前 Sing-box-yg 脚本版本号：${bblue}${latestV}${plain}"

@@ -27,6 +27,20 @@ done
 SBYG_STATE_DIR=${SBYG_STATE_DIR:-$HOME/.sbyg}
 SBYG_ASSET_MANIFEST=${SBYG_ASSET_MANIFEST:-$SBYG_STATE_DIR/assets.v1}
 SBYG_PID_MANIFEST=${SBYG_PID_MANIFEST:-$SBYG_STATE_DIR/pids.v1}
+SBYG_SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)
+SBYG_ASSET_DIR=${SBYG_ASSET_DIR:-$SBYG_SCRIPT_DIR}
+
+sbyg_serv00_install_asset() {
+  local name=$1 destination=$2 mode=${3:-600} temporary
+  [ -r "$SBYG_ASSET_DIR/$name" ] || {
+    red "稳定版安装包缺少 $name；拒绝从 main 分支临时下载"
+    return 1
+  }
+  temporary="${destination}.sbyg.$$"
+  cp "$SBYG_ASSET_DIR/$name" "$temporary" || return
+  chmod "$mode" "$temporary" || { rm -f "$temporary"; return 1; }
+  mv -f "$temporary" "$destination"
+}
 
 sbyg_serv00_register_asset() {
   [ -e "$1" ] || [ -L "$1" ] || return 0
@@ -89,7 +103,7 @@ devil www add ${USERNAME}.serv00.net php > /dev/null 2>&1
 FILE_PATH="${HOME}/domains/${USERNAME}.serv00.net/public_html"
 WORKDIR="${HOME}/domains/${USERNAME}.serv00.net/logs"
 [ -d "$FILE_PATH" ] || mkdir -p "$FILE_PATH"
-[ -d "$WORKDIR" ] || (mkdir -p "$WORKDIR" && chmod 777 "$WORKDIR")
+[ -d "$WORKDIR" ] || (mkdir -p "$WORKDIR" && chmod 700 "$WORKDIR")
 keep_path="${HOME}/domains/${snb}.${USERNAME}.serv00.net/public_nodejs"
 [ -d "$keep_path" ] || mkdir -p "$keep_path"
 
@@ -119,7 +133,7 @@ else
 echo "$UUID" > $WORKDIR/UUID.txt
 UUID=$(cat "$WORKDIR/UUID.txt" 2>/dev/null)
 fi
-curl -sL https://raw.githubusercontent.com/reqingonline/sing-box-yg/main/app.js -o "$keep_path"/app.js
+sbyg_serv00_install_asset app.js "$keep_path/app.js" 600 || exit 1
 sed -i '' "15s/name/$snb/g" "$keep_path"/app.js
 sed -i '' "59s/key/$UUID/g" "$keep_path"/app.js
 sed -i '' "90s/name/$USERNAME/g" "$keep_path"/app.js
@@ -160,7 +174,7 @@ sed -i '' -e "18s|'$vmp'|'$vmess_port'|" serv00keep.sh
 sed -i '' -e "19s|'$hyp'|'$hy2_port'|" serv00keep.sh
 ps aux | grep '[r]un -c con' | awk '{print $2}' | xargs -r kill -9 > /dev/null 2>&1
 sleep 1
-curl -sk "http://${snb}.${USERNAME}.serv00.net/up" > /dev/null 2>&1
+curl -fsS "https://${snb}.${USERNAME}.serv00.net/up" > /dev/null 2>&1
 sleep 5
 }
 
@@ -291,7 +305,7 @@ get_argodomain() {
 }
 
 if [ ! -f serv00keep.sh ]; then
-curl -sSL https://raw.githubusercontent.com/reqingonline/sing-box-yg/main/serv00keep.sh -o serv00keep.sh && chmod +x serv00keep.sh
+sbyg_serv00_install_asset serv00keep.sh "$SBYG_ASSET_DIR/serv00keep.sh" 700 || exit 1
 echo '#!/bin/bash
 red() { echo -e "\e[1;91m$1\033[0m"; }
 green() { echo -e "\e[1;32m$1\033[0m"; }
@@ -319,7 +333,7 @@ cd "$keep_path"
 npm install basic-auth express dotenv axios --silent > /dev/null 2>&1
 rm $HOME/domains/${snb}.${USERNAME}.serv00.net/public_nodejs/public/index.html > /dev/null 2>&1
 devil www restart ${snb}.${USERNAME}.serv00.net
-green "安装完毕，多功能主页地址：http://${snb}.${USERNAME}.serv00.net"
+green "安装完毕，多功能主页地址：https://${snb}.${USERNAME}.serv00.net"
 fi
 
 if [[ "$resport" =~ ^[Yy]$ ]]; then
@@ -1264,7 +1278,7 @@ EOF
 
 cat clash_meta.yaml > ${FILE_PATH}/${UUID}_clashmeta.txt
 cat sing_box.json > ${FILE_PATH}/${UUID}_singbox.txt
-curl -sL https://raw.githubusercontent.com/reqingonline/sing-box-yg/main/index.html -o "$FILE_PATH"/index.html
+sbyg_serv00_install_asset index.html "$FILE_PATH/index.html" 600 || exit 1
 V2rayN_LINK="https://${USERNAME}.serv00.net/${UUID}_v2sub.txt"
 Clashmeta_LINK="https://${USERNAME}.serv00.net/${UUID}_clashmeta.txt"
 Singbox_LINK="https://${USERNAME}.serv00.net/${UUID}_singbox.txt"
@@ -1355,7 +1369,7 @@ Sing-box订阅分享链接：
 $Singbox_LINK
 -------------------------------------------------------------------------------------------------
 
-多功能主页地址：http://${snb}.${USERNAME}.serv00.net
+多功能主页地址：https://${snb}.${USERNAME}.serv00.net
 
 =================================================================================================
 

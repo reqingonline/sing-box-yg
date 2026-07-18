@@ -6,15 +6,23 @@ SBYG_CHANNEL=${SBYG_CHANNEL:-stable}
 SBYG_GITHUB_API=${SBYG_GITHUB_API:-https://api.github.com}
 
 sbyg_current_ref() {
+  local installed_ref_file source_root
   if [ -n "${SBYG_REF:-}" ]; then
     printf '%s\n' "$SBYG_REF"
-  elif [ -r /etc/s-box/release-ref ]; then
-    IFS= read -r SBYG_INSTALLED_REF < /etc/s-box/release-ref
+    return
+  fi
+  source_root=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd) || source_root=
+  for installed_ref_file in \
+    "${SBYG_INSTALL_ROOT:-/usr/local/lib/sing-box-yg}/release-ref" \
+    "$source_root/release-ref" \
+    /etc/s-box/release-ref; do
+    [ -r "$installed_ref_file" ] || continue
+    IFS= read -r SBYG_INSTALLED_REF < "$installed_ref_file"
     sbyg_validate_ref "$SBYG_INSTALLED_REF" || return
     printf '%s\n' "$SBYG_INSTALLED_REF"
-  else
-    printf 'main\n'
-  fi
+    return
+  done
+  printf 'main\n'
 }
 
 sbyg_project_file_url() {

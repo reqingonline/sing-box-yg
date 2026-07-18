@@ -26,6 +26,20 @@ done
 SBYG_STATE_DIR=${SBYG_STATE_DIR:-$HOME/.sbyg}
 SBYG_ASSET_MANIFEST=${SBYG_ASSET_MANIFEST:-$SBYG_STATE_DIR/assets.v1}
 SBYG_PID_MANIFEST=${SBYG_PID_MANIFEST:-$SBYG_STATE_DIR/pids.v1}
+SBYG_SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)
+SBYG_ASSET_DIR=${SBYG_ASSET_DIR:-$SBYG_SCRIPT_DIR}
+
+sbyg_serv00_install_asset() {
+  local name=$1 destination=$2 mode=${3:-600} temporary
+  [ -r "$SBYG_ASSET_DIR/$name" ] || {
+    red "稳定版安装包缺少 $name；拒绝从 main 分支临时下载"
+    return 1
+  }
+  temporary="${destination}.sbyg.$$"
+  cp "$SBYG_ASSET_DIR/$name" "$temporary" || return
+  chmod "$mode" "$temporary" || { rm -f "$temporary"; return 1; }
+  mv -f "$temporary" "$destination"
+}
 
 sbyg_serv00_register_asset() {
   [ -e "$1" ] || [ -L "$1" ] || return 0
@@ -78,9 +92,9 @@ WORKDIR="${HOME}/domains/${USERNAME}.${address}/logs"
 devil www add ${USERNAME}.${address} php > /dev/null 2>&1
 FILE_PATH="${HOME}/domains/${USERNAME}.${address}/public_html"
 [ -d "$FILE_PATH" ] || mkdir -p "$FILE_PATH"
-[ -d "$WORKDIR" ] || (mkdir -p "$WORKDIR" && chmod 777 "$WORKDIR")
+[ -d "$WORKDIR" ] || (mkdir -p "$WORKDIR" && chmod 700 "$WORKDIR")
 devil binexec on >/dev/null 2>&1
-curl -sk "http://${snb}.${USERNAME}.${hona}.net/up" > /dev/null 2>&1
+curl -fsS "https://${snb}.${USERNAME}.${hona}.net/up" > /dev/null 2>&1
 
 read_ip() {
 cat ip.txt
@@ -1415,8 +1429,8 @@ cd "$keep_path"
 npm install basic-auth express dotenv axios --silent > /dev/null 2>&1
 rm $HOME/domains/${snb}.${USERNAME}.${hona}.net/public_nodejs/public/index.html > /dev/null 2>&1
 devil www restart ${snb}.${USERNAME}.${hona}.net
-curl -sk "http://${snb}.${USERNAME}.${hona}.net/up" > /dev/null 2>&1
-green "安装完毕，多功能主页地址：http://${snb}.${USERNAME}.${hona}.net" && sleep 2
+curl -fsS "https://${snb}.${USERNAME}.${hona}.net/up" > /dev/null 2>&1
+green "安装完毕，多功能主页地址：https://${snb}.${USERNAME}.${hona}.net" && sleep 2
 }
 
 okip(){
@@ -1445,23 +1459,22 @@ if [[ -e $WORKDIR/config.json ]]; then
   COMMAND="sb"
   SCRIPT_PATH="$HOME/bin/$COMMAND"
   mkdir -p "$HOME/bin"
-  curl -Ls https://raw.githubusercontent.com/reqingonline/sing-box-yg/main/serv00.sh > "$SCRIPT_PATH"
-  chmod +x "$SCRIPT_PATH"
+  sbyg_serv00_install_asset serv00.sh "$SCRIPT_PATH" 700 || return 1
 if [[ ":$PATH:" != *":$HOME/bin:"* ]]; then
     echo 'export PATH="$HOME/bin:$PATH"' >> "$HOME/.bashrc"
     grep -qxF 'source ~/.bashrc' ~/.bash_profile 2>/dev/null || echo 'source ~/.bashrc' >> ~/.bash_profile
     source ~/.bashrc
 fi
 if [ "$hona" = "serv00" ]; then
-curl -sL https://raw.githubusercontent.com/reqingonline/sing-box-yg/main/app.js -o "$keep_path"/app.js
+sbyg_serv00_install_asset app.js "$keep_path/app.js" 600 || return 1
 sed -i '' "15s/name/$snb/g" "$keep_path"/app.js
 sed -i '' "59s/key/$UUID/g" "$keep_path"/app.js
 sed -i '' "90s/name/$USERNAME/g" "$keep_path"/app.js
 sed -i '' "90s/where/$snb/g" "$keep_path"/app.js
-curl -sSL https://raw.githubusercontent.com/reqingonline/sing-box-yg/main/serv00keep.sh -o serv00keep.sh && chmod +x serv00keep.sh
+sbyg_serv00_install_asset serv00keep.sh "$SBYG_ASSET_DIR/serv00keep.sh" 700 || return 1
 fi
-curl -sL https://raw.githubusercontent.com/reqingonline/sing-box-yg/main/index.html -o "$FILE_PATH"/index.html
-curl -sL https://raw.githubusercontent.com/reqingonline/sing-box-yg/main/sversion | awk -F "更新内容" '{print $1}' | head -n 1 > $WORKDIR/v
+sbyg_serv00_install_asset index.html "$FILE_PATH/index.html" 600 || return 1
+awk -F "更新内容" '{print $1}' "$SBYG_ASSET_DIR/sversion" | head -n 1 > "$WORKDIR/v"
 else
 red "未安装脚本，请选择1进行安装" && exit
 fi
@@ -1473,7 +1486,7 @@ yellow "重启中……请稍后……"
 cd $WORKDIR
 ps aux | grep '[r]un -c con' | awk '{print $2}' | xargs -r kill -9 > /dev/null 2>&1
 if [ "$hona" = "serv00" ]; then
-curl -sk "http://${snb}.${USERNAME}.${hona}.net/up" > /dev/null 2>&1
+curl -fsS "https://${snb}.${USERNAME}.${hona}.net/up" > /dev/null 2>&1
 sleep 5
 else
 sbb=$(cat sb.txt)
@@ -1628,14 +1641,15 @@ yellow "未设置端口"
 fi
 echo
 insV=$(cat $WORKDIR/v 2>/dev/null)
-latestV=$(curl -sL https://raw.githubusercontent.com/reqingonline/sing-box-yg/main/sversion | awk -F "更新内容" '{print $1}' | head -n 1)
+latest_content=$(cat "$SBYG_ASSET_DIR/sversion" 2>/dev/null || true)
+latestV=$(printf '%s\n' "$latest_content" | awk -F "更新内容" '{print $1}' | head -n 1)
 if [ -f $WORKDIR/v ]; then
 if [ "$insV" = "$latestV" ]; then
 echo -e "当前 Serv00/Hostuno-sb-yg 脚本最新版：${purple}${insV}${re} (已安装)"
 else
 echo -e "当前 Serv00/Hostuno-sb-yg 脚本版本号：${purple}${insV}${re}"
 echo -e "检测到最新 Serv00/Hostuno-sb-yg 脚本版本号：${yellow}${latestV}${re} (可选择5进行更新)"
-echo -e "${yellow}$(curl -sL https://raw.githubusercontent.com/reqingonline/sing-box-yg/main/sversion)${re}"
+echo -e "${yellow}${latest_content}${re}"
 fi
 echo -e "========================================================="
 sbb=$(cat $WORKDIR/sb.txt 2>/dev/null)
@@ -1663,7 +1677,7 @@ green "Argo固定域名：$argogd $check"
 fi
 if [ "$hona" = "serv00" ]; then
 green "多功能主页如下 (支持保活、重启、重置端口、进程查看、节点查询)"
-purple "http://${snb}.${USERNAME}.${hona}.net"
+purple "https://${snb}.${USERNAME}.${hona}.net"
 fi
 else
 echo -e "当前 Serv00/Hostuno-sb-yg 脚本版本号：${purple}${latestV}${re}"

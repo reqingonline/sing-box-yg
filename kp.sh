@@ -7,10 +7,11 @@
 # 必填变量：RES、REP、SSH_USER、SSH_PASS、HOST
 # 注意[]"",:这些符号不要乱删，按规律对齐
 # 每行一个{serv00服务器}，一个服务也可，末尾用,间隔，最后一个服务器末尾无需用,间隔
+if [ -z "${ACCOUNTS:-}" ]; then
 ACCOUNTS='[
-{"RES":"n", "REP":"n", "SSH_USER":"你的serv00账号名", "SSH_PASS":"你的serv00账号密码", "REALITY":"你serv00账号名.serv00.net", "SUUID":"自设UUID", "TCP1_PORT":"vless的tcp端口", "TCP2_PORT":"vmess的tcp端口", "UDP_PORT":"hy2的udp端口", "HOST":"s1.serv00.com", "ARGO_DOMAIN":"", "ARGO_AUTH":""},
-{"RES":"y", "REP":"y", "SSH_USER":"123456", "SSH_PASS":"7890000", "REALITY":"time.is", "SUUID":"73203ee6-b3fa-4a3d-b5df-6bb2f55073ad", "TCP1_PORT":"", "TCP2_PORT":"", "UDP_PORT":"", "HOST":"s16.serv00.com", "ARGO_DOMAIN":"你的argo固定域名", "ARGO_AUTH":"eyJhIjoiOTM3YzFjYWI88552NTFiYTM4ZTY0ZDQzRmlNelF0TkRBd1pUQTRNVEJqTUdVeCJ9"}
+{"RES":"n", "REP":"n", "SSH_USER":"你的serv00账号名", "SSH_PASS":"你的serv00账号密码", "REALITY":"你的Reality域名", "SUUID":"自设UUID", "TCP1_PORT":"", "TCP2_PORT":"", "UDP_PORT":"", "HOST":"你的Serv00主机名", "ARGO_DOMAIN":"", "ARGO_AUTH":""}
 ]'
+fi
 run_remote_command() {
 local RES=$1
 local REP=$2
@@ -24,23 +25,30 @@ local UDP_PORT=$9
 local HOST=${10}
 local ARGO_DOMAIN=${11}
 local ARGO_AUTH=${12}
-local script_root keep_script
+local script_root keep_script asset
 script_root=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 keep_script="$script_root/serv00keep.sh"
-if [ ! -r "$keep_script" ]; then
-  echo "缺少本地 serv00keep.sh，拒绝从未校验的远程分支直接执行" >&2
-  return 1
-fi
+for asset in serv00keep.sh app.js index.html; do
+  [ -r "$script_root/$asset" ] || {
+    echo "缺少本地 $asset，拒绝从未校验的远程分支直接执行" >&2
+    return 1
+  }
+done
   if [ -z "${ARGO_DOMAIN}" ]; then
     echo "Argo域名为空，申请Argo临时域名"
   else
     echo "Argo已设置固定域名：${ARGO_DOMAIN}"
   fi
   echo "正在安全部署 $HOST（敏感参数不会写入命令行或日志）"
+  tar -czf - -C "$script_root" serv00keep.sh app.js index.html | \
+    SSHPASS="$SSH_PASS" sshpass -e ssh -o StrictHostKeyChecking=accept-new \
+      "$SSH_USER@$HOST" \
+      'umask 077; mkdir -p "$HOME/.local/share/sing-box-yg"; tar -xzf - -C "$HOME/.local/share/sing-box-yg"; chmod 700 "$HOME/.local/share/sing-box-yg/serv00keep.sh"'
   {
     printf 'export reym=%q UUID=%q vless_port=%q vmess_port=%q hy2_port=%q reset=%q resport=%q ARGO_DOMAIN=%q ARGO_AUTH=%q\n' \
       "$REALITY" "$SUUID" "$TCP1_PORT" "$TCP2_PORT" "$UDP_PORT" "$RES" "$REP" "$ARGO_DOMAIN" "$ARGO_AUTH"
-    cat "$keep_script"
+    printf 'export SBYG_ASSET_DIR="$HOME/.local/share/sing-box-yg"\n'
+    printf 'bash "$SBYG_ASSET_DIR/serv00keep.sh"\n'
   } | SSHPASS="$SSH_PASS" sshpass -e ssh -o StrictHostKeyChecking=accept-new "$SSH_USER@$HOST" 'bash -s'
 }
 sbyg_ssh() {
@@ -62,13 +70,11 @@ else
     elif [ -f /etc/alpine-release ]; then
         package_manager="apk add"
     fi
-    $package_manager sshpass curl jq cron >/dev/null 2>&1 &
+    $package_manager sshpass curl jq cron >/dev/null 2>&1
 fi
 echo "*****************************************************"
 echo "*****************************************************"
-echo "甬哥Github项目  ：github.com/yonggekkk"
-echo "甬哥Blogger博客 ：ygkkk.blogspot.com"
-echo "甬哥YouTube频道 ：www.youtube.com/@ygkkk"
+echo "维护仓库：github.com/reqingonline/sing-box-yg"
 echo "自动远程部署Serv00三合一协议脚本【VPS+软路由】"
 echo "版本：V25.3.26"
 echo "*****************************************************"

@@ -8,6 +8,7 @@ fragment="$tmpdir/functions.sh"
 
 sed -n '/^download_to_temp(){/,/^inssb(){/p' "$repo_root/sb.sh" | sed '$d' > "$fragment"
 source "$fragment"
+sbyg_project_file_url() { printf 'https://example.invalid/%s\n' "$1"; }
 
 SBYG_VERSION_FILE="$tmpdir/version"
 printf old > "$SBYG_VERSION_FILE"

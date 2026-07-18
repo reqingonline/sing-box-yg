@@ -28,5 +28,9 @@ if grep -E 'sshpass +-p|StrictHostKeyChecking=no|echo .*remote_command|grep .*AR
   echo 'Serv00 automation exposes credentials or disables host-key verification' >&2
   exit 1
 fi
+if grep -E 'releases/latest/download/(cloudflared|geo(ip|site))' "$repo_root/sb.sh"; then
+  echo 'release asset bypasses the GitHub digest check' >&2
+  exit 1
+fi
 
 echo 'owned update paths: PASS'

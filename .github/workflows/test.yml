@@ -1,14 +1,24 @@
-name: Shell checks
+name: Security and shell checks
 
 on:
   pull_request:
   push:
 
+permissions:
+  contents: read
+
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - run: bash -n sb.sh
-      - run: bash tests/run.sh
-      - run: git diff --check
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Install declared test tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq shellcheck
+      - name: Run release preflight
+        run: bash scripts/release-checks.sh
