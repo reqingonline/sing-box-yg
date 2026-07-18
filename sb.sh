@@ -4145,23 +4145,39 @@ for svc in sing-box argo; do
 rc-service "$svc" stop >/dev/null 2>&1
 rc-update del "$svc" default >/dev/null 2>&1
 done
-rm -rf /etc/init.d/{sing-box,argo}
+rm -f /etc/init.d/sing-box /etc/init.d/argo
 else
 for svc in sing-box argo; do
 systemctl stop "$svc" >/dev/null 2>&1
 systemctl disable "$svc" >/dev/null 2>&1
 done
-rm -rf /etc/systemd/system/{sing-box.service,argo.service}
+rm -f /etc/systemd/system/sing-box.service /etc/systemd/system/argo.service
 fi
-ps -ef | grep "[l]ocalhost:$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[1].listen_port')" | awk '{print $2}' | xargs kill 2>/dev/null
-ps -ef | grep '[s]bwpph' | awk '{print $2}' | xargs kill 2>/dev/null
-kill -15 $(pgrep -f 'websbox' 2>/dev/null) >/dev/null 2>&1
-rm -rf /etc/s-box sbyg_update /usr/bin/sb /root/geoip.db /root/geosite.db /root/warpapi /root/warpip /root/websbox
-rm -f /etc/local.d/alpineargo.start /etc/local.d/alpinesub.start /etc/local.d/alpinews5.start
+if [[ -f /etc/s-box/subscription-httpd.pid ]]; then
+subscription_pid=$(cat /etc/s-box/subscription-httpd.pid 2>/dev/null)
+case $subscription_pid in
+''|*[!0-9]*) ;;
+*)
+subscription_command=$(ps -p "$subscription_pid" -o command= 2>/dev/null)
+[[ "$subscription_command" == *"httpd"*"/root/websbox"* ]] && kill -TERM "$subscription_pid" 2>/dev/null || true
+;;
+esac
+fi
+recovery_root="/var/backups/sing-box-yg/$(date +%Y%m%d-%H%M%S)-$$"
+install -d -m 700 "$recovery_root" || { red "Unable to create uninstall recovery directory"; return 1; }
+if [[ -e /etc/s-box ]]; then
+mv /etc/s-box "$recovery_root/etc-s-box" || return 1
+fi
+for recovery_asset in /root/geoip.db /root/geosite.db /root/warpapi /root/warpip /root/websbox; do
+[[ -e "$recovery_asset" ]] || continue
+mv "$recovery_asset" "$recovery_root/${recovery_asset##*/}" || return 1
+done
+rm -f /usr/bin/sb /etc/local.d/alpineargo.start /etc/local.d/alpinesub.start /etc/local.d/alpinews5.start
 uncronsb
 sbyg_fw_remove_all >/dev/null 2>&1 || true
 sbyg_fw_persist >/dev/null 2>&1 || true
 green "Sing-box卸载完成！"
+blue "原配置和项目数据已移至可恢复目录：$recovery_root"
 blue "欢迎继续使用Sing-box-yg脚本：bash <(curl -Ls https://raw.githubusercontent.com/yonggekkk/sing-box-yg/main/sb.sh)"
 echo
 }

@@ -10,6 +10,59 @@ green() { echo -e "\e[1;32m$1\033[0m"; }
 yellow() { echo -e "\e[1;33m$1\033[0m"; }
 purple() { echo -e "\e[1;35m$1\033[0m"; }
 reading() { read -p "$(red "$1")" "$2"; }
+umask 077
+sbyg_load_library() {
+  local name=$1 root script_root
+  script_root=$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)
+  for root in "${SBYG_LIB_DIR:-}" "$HOME/.sbyg/lib" "$script_root/lib"; do
+    [[ -n "$root" && -r "$root/$name.sh" ]] || continue
+    . "$root/$name.sh"
+    return 0
+  done
+  return 1
+}
+for sbyg_library in cleanup secrets; do
+  sbyg_load_library "$sbyg_library" || true
+done
+SBYG_STATE_DIR=${SBYG_STATE_DIR:-$HOME/.sbyg}
+SBYG_ASSET_MANIFEST=${SBYG_ASSET_MANIFEST:-$SBYG_STATE_DIR/assets.v1}
+SBYG_PID_MANIFEST=${SBYG_PID_MANIFEST:-$SBYG_STATE_DIR/pids.v1}
+
+sbyg_serv00_register_asset() {
+  [ -e "$1" ] || [ -L "$1" ] || return 0
+  declare -F sbyg_manifest_add >/dev/null 2>&1 || return 1
+  sbyg_manifest_add "$SBYG_ASSET_MANIFEST" "$HOME" "$1"
+}
+
+sbyg_serv00_seed_legacy_assets() {
+  local safe_workdir path name
+  safe_workdir=${WORKDIR:-$HOME/domains/$(whoami | tr '[:upper:]' '[:lower:]').serv00.net/logs}
+  for path in "$HOME/serv00keep.sh" "$HOME/webport.sh" "$HOME/bin/sb"; do
+    sbyg_serv00_register_asset "$path" || return
+  done
+  for name in config.json config.yml tunnel.yml tunnel.json sb.log boot.log \
+    ARGO_AUTH.log ARGO_DOMAIN.log ip.txt list.txt sb.txt ag.txt; do
+    sbyg_serv00_register_asset "$safe_workdir/$name" || return
+  done
+  for name in sb.txt ag.txt; do
+    [ -f "$safe_workdir/$name" ] || continue
+    path=$(cat "$safe_workdir/$name" 2>/dev/null)
+    case $path in ''|*[!A-Za-z0-9._-]*) continue ;; esac
+    sbyg_serv00_register_asset "$safe_workdir/$path" || return
+  done
+}
+
+sbyg_serv00_cleanup_owned() {
+  declare -F sbyg_cleanup_manifest >/dev/null 2>&1 || {
+    red "安全清理模块不可用，已拒绝执行重置"
+    return 1
+  }
+  sbyg_serv00_seed_legacy_assets || return
+  sbyg_kill_recorded_pids "$SBYG_PID_MANIFEST" 2>/dev/null || true
+  : > "$SBYG_PID_MANIFEST"
+  chmod 600 "$SBYG_PID_MANIFEST"
+  sbyg_cleanup_manifest "$SBYG_ASSET_MANIFEST" "$HOME"
+}
 export LC_ALL=C
 export UUID=${UUID:-''}  
 export ARGO_DOMAIN=${ARGO_DOMAIN:-''}   
@@ -27,16 +80,10 @@ HOSTNAME=$(hostname)
 snb=$(hostname | cut -d. -f1)
 nb=$(hostname | cut -d '.' -f 1 | tr -d 's')
 if [[ "$reset" =~ ^[Yy]$ ]]; then
-bash -c 'ps aux | grep $(whoami) | grep -v "sshd\|bash\|grep" | awk "{print \$2}" | xargs -r kill -9 >/dev/null 2>&1' >/dev/null 2>&1
-devil www list | awk 'NR > 1 && NF {print $1}' | xargs -I {} devil www del {} > /dev/null 2>&1
+sbyg_serv00_cleanup_owned || { red "安全重置失败，已保留账号中的其他数据"; exit 1; }
 sed -i '/export PATH="\$HOME\/bin:\$PATH"/d' "${HOME}/.bashrc" >/dev/null 2>&1
 source "${HOME}/.bashrc" >/dev/null 2>&1
-find ~ -type f -exec chmod 644 {} \; 2>/dev/null
-find ~ -type d -exec chmod 755 {} \; 2>/dev/null
-find ~ -type f -exec rm -f {} \; 2>/dev/null
-find ~ -type d -empty -exec rmdir {} \; 2>/dev/null
-find ~ -exec rm -rf {} \; 2>/dev/null
-echo "重置系统完成"
+echo "本项目安全重置完成，其他账号数据已保留"
 fi
 devil www add ${USERNAME}.serv00.net php > /dev/null 2>&1
 FILE_PATH="${HOME}/domains/${USERNAME}.serv00.net/public_html"
@@ -571,6 +618,7 @@ if [ -e "$(basename "${FILE_MAP[web]}")" ]; then
    echo "$(basename "${FILE_MAP[web]}")" > sb.txt
    sbb=$(cat sb.txt)   
     nohup ./"$sbb" run -c config.json >/dev/null 2>&1 &
+    declare -F sbyg_pid_manifest_add >/dev/null 2>&1 && sbyg_pid_manifest_add "$SBYG_PID_MANIFEST" "$!" "$sbb" || true
     sleep 5
 if pgrep -x "$sbb" > /dev/null; then
     green "$sbb 主进程已启动"
@@ -578,12 +626,14 @@ else
     red "$sbb 主进程未启动, 重启中..."
     pkill -x "$sbb"
     nohup ./"$sbb" run -c config.json >/dev/null 2>&1 &
+    declare -F sbyg_pid_manifest_add >/dev/null 2>&1 && sbyg_pid_manifest_add "$SBYG_PID_MANIFEST" "$!" "$sbb" || true
     sleep 2
     purple "$sbb 主进程已重启"
 fi
 else
     sbb=$(cat sb.txt)   
     nohup ./"$sbb" run -c config.json >/dev/null 2>&1 &
+    declare -F sbyg_pid_manifest_add >/dev/null 2>&1 && sbyg_pid_manifest_add "$SBYG_PID_MANIFEST" "$!" "$sbb" || true
     sleep 5
 if pgrep -x "$sbb" > /dev/null; then
     green "$sbb 主进程已启动"
@@ -591,6 +641,7 @@ else
     red "$sbb 主进程未启动, 重启中..."
     pkill -x "$sbb"
     nohup ./"$sbb" run -c config.json >/dev/null 2>&1 &
+    declare -F sbyg_pid_manifest_add >/dev/null 2>&1 && sbyg_pid_manifest_add "$SBYG_PID_MANIFEST" "$!" "$sbb" || true
     sleep 2
     purple "$sbb 主进程已重启"
 fi
@@ -611,6 +662,7 @@ if [ -e "$(basename "${FILE_MAP[bot]}")" ]; then
      args="tunnel --url http://localhost:$vmess_port --no-autoupdate --logfile boot.log --loglevel info"
     fi
     nohup ./"$agg" $args >/dev/null 2>&1 &
+    declare -F sbyg_pid_manifest_add >/dev/null 2>&1 && sbyg_pid_manifest_add "$SBYG_PID_MANIFEST" "$!" "$agg" || true
     sleep 10
 if pgrep -x "$agg" > /dev/null; then
     green "$agg Arog进程已启动"
@@ -618,6 +670,7 @@ else
     red "$agg Argo进程未启动, 重启中..."
     pkill -x "$agg"
     nohup ./"$agg" "${args}" >/dev/null 2>&1 &
+    declare -F sbyg_pid_manifest_add >/dev/null 2>&1 && sbyg_pid_manifest_add "$SBYG_PID_MANIFEST" "$!" "$agg" || true
     sleep 5
     purple "$agg Argo进程已重启"
 fi
@@ -632,6 +685,7 @@ else
     fi
     pkill -x "$agg"
     nohup ./"$agg" $args >/dev/null 2>&1 &
+    declare -F sbyg_pid_manifest_add >/dev/null 2>&1 && sbyg_pid_manifest_add "$SBYG_PID_MANIFEST" "$!" "$agg" || true
     sleep 10
 if pgrep -x "$agg" > /dev/null; then
     green "$agg Arog进程已启动"
@@ -639,6 +693,7 @@ else
     red "$agg Argo进程未启动, 重启中..."
     pkill -x "$agg"
     nohup ./"$agg" "${args}" >/dev/null 2>&1 &
+    declare -F sbyg_pid_manifest_add >/dev/null 2>&1 && sbyg_pid_manifest_add "$SBYG_PID_MANIFEST" "$!" "$agg" || true
     sleep 5
     purple "$agg Argo进程已重启"
 fi

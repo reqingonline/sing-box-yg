@@ -9,6 +9,59 @@ green() { echo -e "\e[1;32m$1\033[0m"; }
 yellow() { echo -e "\e[1;33m$1\033[0m"; }
 purple() { echo -e "\e[1;35m$1\033[0m"; }
 reading() { read -p "$(red "$1")" "$2"; }
+umask 077
+sbyg_load_library() {
+  local name=$1 root script_root
+  script_root=$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)
+  for root in "${SBYG_LIB_DIR:-}" "$HOME/.sbyg/lib" "$script_root/lib"; do
+    [[ -n "$root" && -r "$root/$name.sh" ]] || continue
+    . "$root/$name.sh"
+    return 0
+  done
+  return 1
+}
+for sbyg_library in cleanup secrets; do
+  sbyg_load_library "$sbyg_library" || true
+done
+SBYG_STATE_DIR=${SBYG_STATE_DIR:-$HOME/.sbyg}
+SBYG_ASSET_MANIFEST=${SBYG_ASSET_MANIFEST:-$SBYG_STATE_DIR/assets.v1}
+SBYG_PID_MANIFEST=${SBYG_PID_MANIFEST:-$SBYG_STATE_DIR/pids.v1}
+
+sbyg_serv00_register_asset() {
+  [ -e "$1" ] || [ -L "$1" ] || return 0
+  declare -F sbyg_manifest_add >/dev/null 2>&1 || return 1
+  sbyg_manifest_add "$SBYG_ASSET_MANIFEST" "$HOME" "$1"
+}
+
+sbyg_serv00_seed_legacy_assets() {
+  local path name
+  for path in "$HOME/serv00keep.sh" "$HOME/webport.sh" "$HOME/bin/sb"; do
+    sbyg_serv00_register_asset "$path" || return
+  done
+  [ -n "${WORKDIR:-}" ] || return 0
+  for name in config.json config.yml tunnel.yml tunnel.json sb.log boot.log \
+    ARGO_AUTH.log ARGO_DOMAIN.log ip.txt list.txt sb.txt ag.txt; do
+    sbyg_serv00_register_asset "$WORKDIR/$name" || return
+  done
+  for name in sb.txt ag.txt; do
+    [ -f "$WORKDIR/$name" ] || continue
+    path=$(cat "$WORKDIR/$name" 2>/dev/null)
+    case $path in ''|*[!A-Za-z0-9._-]*) continue ;; esac
+    sbyg_serv00_register_asset "$WORKDIR/$path" || return
+  done
+}
+
+sbyg_serv00_cleanup_owned() {
+  declare -F sbyg_cleanup_manifest >/dev/null 2>&1 || {
+    red "安全清理模块不可用，已拒绝执行重置"
+    return 1
+  }
+  sbyg_serv00_seed_legacy_assets || return
+  sbyg_kill_recorded_pids "$SBYG_PID_MANIFEST" 2>/dev/null || true
+  : > "$SBYG_PID_MANIFEST"
+  chmod 600 "$SBYG_PID_MANIFEST"
+  sbyg_cleanup_manifest "$SBYG_ASSET_MANIFEST" "$HOME"
+}
 USERNAME=$(whoami | tr '[:upper:]' '[:lower:]')
 snb=$(hostname | cut -d. -f1)
 nb=$(hostname | cut -d '.' -f 1 | tr -d 's')
@@ -237,9 +290,7 @@ uninstall_singbox() {
   reading "\n确定要卸载吗？【y/n】: " choice
     case "$choice" in
        [Yy])
-	  bash -c 'ps aux | grep $(whoami) | grep -v "sshd\|bash\|grep" | awk "{print \$2}" | xargs -r kill -9 >/dev/null 2>&1' >/dev/null 2>&1
-          rm -rf bin domains serv00keep.sh webport.sh
-	  devil www list | awk 'NR > 1 && NF {print $1}' | xargs -I {} devil www del {} > /dev/null 2>&1
+	  sbyg_serv00_cleanup_owned || { red "本项目清理失败，未触碰其他账号数据"; return 1; }
 	  sed -i '' '/export PATH="\$HOME\/bin:\$PATH"/d' ~/.bashrc
           source ~/.bashrc
           purple "************************************************************"
@@ -253,23 +304,16 @@ uninstall_singbox() {
 }
 
 kill_all_tasks() {
-reading "\n注意！！！清理所有进程并清空所有安装内容，将退出ssh连接，确定继续清理吗？【y/n】: " choice
+reading "\n仅停止并清理本项目记录的进程和文件，保留其他账号数据，确定继续吗？【y/n】: " choice
   case "$choice" in
     [Yy]) 
-    bash -c 'ps aux | grep $(whoami) | grep -v "sshd\|bash\|grep" | awk "{print \$2}" | xargs -r kill -9 >/dev/null 2>&1' >/dev/null 2>&1
-    devil www list | awk 'NR > 1 && NF {print $1}' | xargs -I {} devil www del {} > /dev/null 2>&1
+    sbyg_serv00_cleanup_owned || { red "本项目清理失败，未触碰其他账号数据"; return 1; }
     sed -i '' '/export PATH="\$HOME\/bin:\$PATH"/d' ~/.bashrc
     source ~/.bashrc
     purple "************************************************************"
     purple "Serv00/Hostuno-sb-yg清理重置完成！"
     purple "欢迎继续使用脚本：bash <(curl -Ls https://raw.githubusercontent.com/yonggekkk/sing-box-yg/main/serv00.sh)"
     purple "************************************************************"
-    find ~ -type f -exec chmod 644 {} \; 2>/dev/null
-    find ~ -type d -exec chmod 755 {} \; 2>/dev/null
-    find ~ -type f -exec rm -f {} \; 2>/dev/null
-    find ~ -type d -empty -exec rmdir {} \; 2>/dev/null
-    find ~ -exec rm -rf {} \; 2>/dev/null
-    killall -9 -u $(whoami)
     ;;
     *) menu ;;
   esac
@@ -532,6 +576,7 @@ if [ -e "$(basename "${FILE_MAP[web]}")" ]; then
    echo "$(basename "${FILE_MAP[web]}")" > sb.txt
    sbb=$(cat sb.txt)   
     nohup ./"$sbb" run -c config.json >/dev/null 2>&1 &
+    declare -F sbyg_pid_manifest_add >/dev/null 2>&1 && sbyg_pid_manifest_add "$SBYG_PID_MANIFEST" "$!" "$sbb" || true
     sleep 5
 if pgrep -x "$sbb" > /dev/null; then
     green "$sbb 主进程已启动"
@@ -539,12 +584,14 @@ else
     red "$sbb 主进程未启动, 重启中..."
     pkill -x "$sbb"
     nohup ./"$sbb" run -c config.json >/dev/null 2>&1 &
+    declare -F sbyg_pid_manifest_add >/dev/null 2>&1 && sbyg_pid_manifest_add "$SBYG_PID_MANIFEST" "$!" "$sbb" || true
     sleep 2
     purple "$sbb 主进程已重启"
 fi
 else
     sbb=$(cat sb.txt)   
     nohup ./"$sbb" run -c config.json >/dev/null 2>&1 &
+    declare -F sbyg_pid_manifest_add >/dev/null 2>&1 && sbyg_pid_manifest_add "$SBYG_PID_MANIFEST" "$!" "$sbb" || true
     sleep 5
 if pgrep -x "$sbb" > /dev/null; then
     green "$sbb 主进程已启动"
@@ -552,6 +599,7 @@ else
     red "$sbb 主进程未启动, 重启中..."
     pkill -x "$sbb"
     nohup ./"$sbb" run -c config.json >/dev/null 2>&1 &
+    declare -F sbyg_pid_manifest_add >/dev/null 2>&1 && sbyg_pid_manifest_add "$SBYG_PID_MANIFEST" "$!" "$sbb" || true
     sleep 2
     purple "$sbb 主进程已重启"
 fi
@@ -572,6 +620,7 @@ if [ -e "$(basename "${FILE_MAP[bot]}")" ]; then
      args="tunnel --url http://localhost:$vmess_port --no-autoupdate --logfile boot.log --loglevel info"
     fi
     nohup ./"$agg" $args >/dev/null 2>&1 &
+    declare -F sbyg_pid_manifest_add >/dev/null 2>&1 && sbyg_pid_manifest_add "$SBYG_PID_MANIFEST" "$!" "$agg" || true
     sleep 10
 if pgrep -x "$agg" > /dev/null; then
     green "$agg Arog进程已启动"
@@ -579,6 +628,7 @@ else
     red "$agg Argo进程未启动, 重启中..."
     pkill -x "$agg"
     nohup ./"$agg" "${args}" >/dev/null 2>&1 &
+    declare -F sbyg_pid_manifest_add >/dev/null 2>&1 && sbyg_pid_manifest_add "$SBYG_PID_MANIFEST" "$!" "$agg" || true
     sleep 5
     purple "$agg Argo进程已重启"
 fi
@@ -593,6 +643,7 @@ else
     fi
     pkill -x "$agg"
     nohup ./"$agg" $args >/dev/null 2>&1 &
+    declare -F sbyg_pid_manifest_add >/dev/null 2>&1 && sbyg_pid_manifest_add "$SBYG_PID_MANIFEST" "$!" "$agg" || true
     sleep 10
 if pgrep -x "$agg" > /dev/null; then
     green "$agg Arog进程已启动"
@@ -600,6 +651,7 @@ else
     red "$agg Argo进程未启动, 重启中..."
     pkill -x "$agg"
     nohup ./"$agg" "${args}" >/dev/null 2>&1 &
+    declare -F sbyg_pid_manifest_add >/dev/null 2>&1 && sbyg_pid_manifest_add "$SBYG_PID_MANIFEST" "$!" "$agg" || true
     sleep 5
     purple "$agg Argo进程已重启"
 fi
@@ -1426,6 +1478,7 @@ sleep 5
 else
 sbb=$(cat sb.txt)
 nohup ./"$sbb" run -c config.json >/dev/null 2>&1 &
+declare -F sbyg_pid_manifest_add >/dev/null 2>&1 && sbyg_pid_manifest_add "$SBYG_PID_MANIFEST" "$!" "$sbb" || true
 sleep 1
 fi
 if pgrep -x "$sbb" > /dev/null; then
@@ -1479,6 +1532,7 @@ fi
 args="tunnel --url http://localhost:$argoport --no-autoupdate --logfile boot.log --loglevel info"
 fi
     nohup ./"$agg" $args >/dev/null 2>&1 &
+    declare -F sbyg_pid_manifest_add >/dev/null 2>&1 && sbyg_pid_manifest_add "$SBYG_PID_MANIFEST" "$!" "$agg" || true
     sleep 10
 if pgrep -x "$agg" > /dev/null; then
     green "$agg Argo进程已启动"
@@ -1486,6 +1540,7 @@ else
     red "$agg Argo进程未启动, 重启中..."
     pkill -x "$agg"
     nohup ./"$agg" "${args}" >/dev/null 2>&1 &
+    declare -F sbyg_pid_manifest_add >/dev/null 2>&1 && sbyg_pid_manifest_add "$SBYG_PID_MANIFEST" "$!" "$agg" || true
     sleep 5
     purple "$agg Argo进程已重启"
 fi
