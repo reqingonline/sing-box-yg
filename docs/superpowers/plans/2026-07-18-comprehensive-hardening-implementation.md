@@ -574,7 +574,7 @@ git commit -m "feat: add hardened service health diagnostics"
 - Modify: `serv00.sh:1-1300`
 - Modify: `serv00keep.sh:1-900`
 - Modify: `kp.sh`
-- Delete: `SFW-1.1.5-linux-amd64.zip`
+- Delete: `SFW-(V1.13.0).zip`
 
 - [ ] **Step 1: Write repository-ownership regression tests**
 
@@ -630,7 +630,7 @@ Read the installed candidate's version before rendering. Keep one canonical JSON
 
 - [ ] **Step 6: Remove opaque tracked artifacts**
 
-Delete `SFW-1.1.5-linux-amd64.zip`. If `sbwpph` remains required, fetch it only from a tagged Release Asset with a checksum entry and provenance documented in `docs/SECURITY.md`; otherwise remove the feature cleanly from menus and cleanup manifests.
+Delete `SFW-(V1.13.0).zip`. If `sbwpph` remains required, fetch it only from a tagged Release Asset with a checksum entry and provenance documented in `docs/SECURITY.md`; otherwise remove the feature cleanly from menus and cleanup manifests.
 
 - [ ] **Step 7: Run ownership and compatibility tests**
 
@@ -648,7 +648,7 @@ Expected: no executable update path references another owner, generated fixtures
 
 ```bash
 git add sb.sh serv00.sh serv00keep.sh kp.sh lib tests
-git add -u SFW-1.1.5-linux-amd64.zip
+git add -u 'SFW-(V1.13.0).zip'
 git commit -m "feat: own update paths and support sing-box 1.14"
 ```
 
