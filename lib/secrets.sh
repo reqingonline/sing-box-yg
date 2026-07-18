@@ -1,5 +1,23 @@
 #!/usr/bin/env bash
 
+sbyg_secure_defaults() {
+  local root=${1:-/etc/s-box} path
+  umask 077
+  [ -e "$root" ] || return 0
+  [ -d "$root" ] && [ ! -L "$root" ] || {
+    printf 'unsafe secret root: %s\n' "$root" >&2
+    return 2
+  }
+  chmod 700 "$root" || return
+  for path in \
+    "$root"/*.json "$root"/*.yaml "$root"/*.txt "$root"/*.log \
+    "$root"/*.key "$root"/*.pem "$root"/*.crt "$root"/.secrets/*; do
+    [ -f "$path" ] || continue
+    chmod 600 "$path" || return
+  done
+  [ ! -d "$root/.secrets" ] || chmod 700 "$root/.secrets"
+}
+
 sbyg_redact() {
   local value=${1-} length=${#1}
   if [ "$length" -lt 12 ]; then
@@ -7,6 +25,11 @@ sbyg_redact() {
     return
   fi
   printf '%s...%s\n' "${value:0:4}" "${value:length-4:4}"
+}
+
+sbyg_redact_url() {
+  printf '%s\n' "${1-}" | sed -E \
+    's/((private_token|access_token|token)=)[^&[:space:]]+/\1[redacted]/g'
 }
 
 sbyg_secret_dir() {

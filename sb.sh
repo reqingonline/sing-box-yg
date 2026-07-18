@@ -12,6 +12,7 @@ yellow(){ echo -e "\033[33m\033[01m$1\033[0m";}
 blue(){ echo -e "\033[36m\033[01m$1\033[0m";}
 white(){ echo -e "\033[37m\033[01m$1\033[0m";}
 readp(){ read -p "$(yellow "$1")" $2;}
+readsp(){ read -r -s -p "$(yellow "$1")" "$2"; echo; }
 sbyg_load_library(){
 local name=$1 root script_root
 script_root=$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)
@@ -22,9 +23,10 @@ return 0
 done
 return 1
 }
-for sbyg_library in source download secrets transaction firewall; do
+for sbyg_library in source download secrets transaction firewall subscription; do
 sbyg_load_library "$sbyg_library" || true
 done
+declare -F sbyg_secure_defaults >/dev/null 2>&1 && sbyg_secure_defaults /etc/s-box
 [[ $EUID -ne 0 ]] && yellow "请以root模式运行脚本" && exit
 stty erase $'\b' 2>/dev/null || stty erase '^H' 2>/dev/null
 #[[ -e /etc/hosts ]] && grep -qE '^ *172.65.251.78 gitlab.com' /etc/hosts || echo -e '\n172.65.251.78 gitlab.com' >> /etc/hosts
@@ -2528,9 +2530,9 @@ fi
 
 cfargoym(){
 echo
-if [[ -f /etc/s-box/sbargotoken.log && -f /etc/s-box/sbargoym.log ]]; then
+if [[ -f /etc/s-box/.secrets/argo-token && -f /etc/s-box/sbargoym.log ]]; then
 green "当前Argo固定隧道域名：$(cat /etc/s-box/sbargoym.log 2>/dev/null)"
-green "当前Argo固定隧道Token：$(cat /etc/s-box/sbargotoken.log 2>/dev/null)"
+green "当前Argo固定隧道Token：$(sbyg_redact "$(cat /etc/s-box/.secrets/argo-token 2>/dev/null)")"
 fi
 echo
 green "请进入Cloudflare官网 --- Zero Trust --- 网络 --- 连接器，创建固定隧道"
@@ -2540,12 +2542,13 @@ yellow "0：返回上层"
 readp "请选择【0-2】：" menu
 if [ "$menu" = "1" ]; then
 cloudflaredargo
-readp "输入Argo固定隧道Token: " argotoken
+readsp "输入Argo固定隧道Token: " argotoken
 readp "输入Argo固定隧道域名: " argoym
 pid=$(ps -ef 2>/dev/null | awk '/[c]loudflared.*run/ {print $2}')
 [ -n "$pid" ] && kill -9 "$pid" >/dev/null 2>&1
 echo
 if [[ -n "${argotoken}" && -n "${argoym}" ]]; then
+sbyg_write_secret /etc/s-box/.secrets/argo-token "$argotoken" || return 1
 if pidof systemd >/dev/null 2>&1; then
 cat > /etc/systemd/system/argo.service <<EOF
 [Unit]
@@ -2555,7 +2558,7 @@ After=network.target
 Type=simple
 NoNewPrivileges=yes
 TimeoutStartSec=0
-ExecStart=/etc/s-box/cloudflared tunnel --no-autoupdate --edge-ip-version auto --protocol http2 run --token "${argotoken}"
+ExecStart=/etc/s-box/cloudflared tunnel --no-autoupdate --edge-ip-version auto --protocol http2 run --token-file /etc/s-box/.secrets/argo-token
 Restart=on-failure
 RestartSec=5s
 [Install]
@@ -2569,7 +2572,7 @@ cat > /etc/init.d/argo <<EOF
 #!/sbin/openrc-run
 description="argo service"
 command="/etc/s-box/cloudflared tunnel"
-command_args="--no-autoupdate --edge-ip-version auto --protocol http2 run --token ${argotoken}"
+command_args="--no-autoupdate --edge-ip-version auto --protocol http2 run --token-file /etc/s-box/.secrets/argo-token"
 pidfile="/run/argo.pid"
 command_background="yes"
 depend() {
@@ -2581,8 +2584,8 @@ rc-update add argo default >/dev/null 2>&1
 rc-service argo start >/dev/null 2>&1
 fi
 fi
-echo ${argoym} > /etc/s-box/sbargoym.log
-echo ${argotoken} > /etc/s-box/sbargotoken.log
+sbyg_write_secret /etc/s-box/sbargoym.log "$argoym" || return 1
+rm -f /etc/s-box/sbargotoken.log
 argo=$(cat /etc/s-box/sbargoym.log 2>/dev/null)
 sbshare > /dev/null 2>&1
 blue "Argo固定隧道设置完成，固定域名：$argo"
@@ -3103,12 +3106,15 @@ yellow "0：返回上层"
 readp "请选择【0-1】：" menu
 if [ "$menu" = "1" ]; then
 rm -rf /etc/s-box/sbtg.sh
-readp "输入Telegram机器人Token: " token
+readsp "输入Telegram机器人Token: " token
 telegram_token=$token
 readp "输入Telegram机器人用户ID: " userid
 telegram_id=$userid
+sbyg_write_secret /etc/s-box/.secrets/telegram-token "$telegram_token" || return 1
+sbyg_write_secret /etc/s-box/.secrets/telegram-id "$telegram_id" || return 1
 echo '#!/bin/bash
 export LANG=en_US.UTF-8
+telegram_token=$(cat /etc/s-box/.secrets/telegram-token)
 sbnh=$(/etc/s-box/sing-box version 2>/dev/null | awk '/version/{print $NF}' 2>/dev/null | cut -d '.' -f 1,2)
 total_lines=$(wc -l < /etc/s-box/clmi.yaml)
 half=$((total_lines / 2))
@@ -3157,7 +3163,7 @@ message_text_m10=$(echo "$m10")
 message_text_m11=$(echo "$m11")
 message_text_m12=$(echo "$m12")
 MODE=HTML
-URL="https://api.telegram.org/bottelegram_token/sendMessage"
+URL="https://api.telegram.org/bot${telegram_token}/sendMessage"
 res=$(timeout 20s curl -s -X POST $URL -d chat_id=telegram_id  -d parse_mode=${MODE} --data-urlencode "text=🚀【 Vless-reality-vision 分享链接 】：支持v2rayng、nekobox "$'"'"'\n\n'"'"'"${message_text_m1}")
 if [[ -f /etc/s-box/vm_ws.txt ]]; then
 res=$(timeout 20s curl -s -X POST $URL -d chat_id=telegram_id  -d parse_mode=${MODE} --data-urlencode "text=🚀【 Vmess-ws 分享链接 】：支持v2rayng、nekobox "$'"'"'\n\n'"'"'"${message_text_m2}")
@@ -3203,8 +3209,8 @@ else
 echo "TG推送失败，请检查TG机器人Token和ID";
 fi
 ' > /etc/s-box/sbtg.sh
-sed -i "s/telegram_token/$telegram_token/g" /etc/s-box/sbtg.sh
 sed -i "s/telegram_id/$telegram_id/g" /etc/s-box/sbtg.sh
+chmod 700 /etc/s-box/sbtg.sh
 green "设置完成！请确保TG机器人已处于激活状态！"
 tgnotice
 else
@@ -3252,17 +3258,22 @@ fi
 }
 
 ipsub(){
+declare -F sbyg_subscription_token >/dev/null 2>&1 || { red "Subscription security module is unavailable"; return 1; }
 subtokenipsub(){
 echo
-readp "输入订阅链接路径密码（回车表示使用当前UUID）：" menu
+readp "输入独立的订阅路径口令（回车表示安全随机生成）：" menu
 if [ -z "$menu" ]; then
-subtoken="$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[0].users[0].uuid')"
+sbyg_subscription_token > /etc/s-box/.subscription-token.new || return 1
+subtoken=$(cat /etc/s-box/.subscription-token.new)
+rm -f /etc/s-box/.subscription-token.new
 else
 subtoken="$menu"
 fi
-rm -rf /root/websbox/"$(cat /etc/s-box/subtoken.log 2>/dev/null)"
-echo $subtoken > /etc/s-box/subtoken.log
-green "订阅链接路径密码：$(cat /etc/s-box/subtoken.log 2>/dev/null)"
+sbyg_subscription_validate_token "$subtoken" || { red "订阅口令只能包含字母、数字、下划线和短横线，长度为24-128"; return 1; }
+old_subtoken=$(cat /etc/s-box/subtoken.log 2>/dev/null)
+[[ -z "$old_subtoken" ]] || sbyg_subscription_remove_token_root /root/websbox "$old_subtoken" || true
+sbyg_write_secret /etc/s-box/subtoken.log "$subtoken" || return 1
+green "订阅链接路径密码：$(sbyg_redact "$subtoken")"
 }
 subportipsub(){
 echo
@@ -3272,7 +3283,8 @@ subport=$(shuf -i 10000-65535 -n 1)
 else
 subport="$menu"
 fi
-echo $subport > /etc/s-box/subport.log
+sbyg_subscription_validate_port "$subport" || { red "订阅端口必须在1024-65535之间"; return 1; }
+sbyg_write_secret /etc/s-box/subport.log "$subport" || return 1
 green "订阅链接端口：$(cat /etc/s-box/subport.log 2>/dev/null)"
 }
 echo
@@ -3303,28 +3315,27 @@ fi
 echo
 green "请稍后…………"
 kill -15 $(pgrep -f 'websbox' 2>/dev/null) >/dev/null 2>&1
-mkdir -p /root/websbox/"$(cat /etc/s-box/subtoken.log 2>/dev/null)"
-ln -sf /etc/s-box/clmi.yaml /root/websbox/"$(cat /etc/s-box/subtoken.log 2>/dev/null)"/clmi.yaml
-ln -sf /etc/s-box/sbox.json /root/websbox/"$(cat /etc/s-box/subtoken.log 2>/dev/null)"/sbox.json
-ln -sf /etc/s-box/jhsub.txt /root/websbox/"$(cat /etc/s-box/subtoken.log 2>/dev/null)"/jhsub.txt
-if command -v apk >/dev/null 2>&1; then
-busybox-extras httpd -f -p "$(cat /etc/s-box/subport.log 2>/dev/null)" -h /root/websbox > /dev/null 2>&1 &
-else
-busybox httpd -f -p "$(cat /etc/s-box/subport.log 2>/dev/null)" -h /root/websbox > /dev/null 2>&1 &
-fi
+subtoken=$(cat /etc/s-box/subtoken.log 2>/dev/null)
+subport=$(cat /etc/s-box/subport.log 2>/dev/null)
+sbyg_subscription_prepare_root /root/websbox "$subtoken" || return 1
+ln -sf /etc/s-box/clmi.yaml "/root/websbox/$subtoken/clmi.yaml"
+ln -sf /etc/s-box/sbox.json "/root/websbox/$subtoken/sbox.json"
+ln -sf /etc/s-box/jhsub.txt "/root/websbox/$subtoken/jhsub.txt"
+sub_pid=$(sbyg_subscription_start_loopback /root/websbox "$subport" /etc/s-box/subscription-httpd.log) || return 1
+sbyg_write_secret /etc/s-box/subscription-httpd.pid "$sub_pid" || true
 sleep 5
 if command -v apk >/dev/null 2>&1; then
 cat > /etc/local.d/alpinesub.start <<'EOF'
 #!/bin/bash
 sleep 10
-busybox-extras httpd -f -p $(cat /etc/s-box/subport.log 2>/dev/null) -h /root/websbox > /dev/null 2>&1 &
+busybox-extras httpd -f -p 127.0.0.1:$(cat /etc/s-box/subport.log 2>/dev/null) -h /root/websbox > /dev/null 2>&1 &
 EOF
 chmod +x /etc/local.d/alpinesub.start
 rc-update add local default >/dev/null 2>&1
 else
 crontab -l 2>/dev/null > /tmp/crontab.tmp
 sed -i '/websbox/d' /tmp/crontab.tmp
-echo '@reboot sleep 10 && /bin/bash -c "busybox httpd -f -p $(cat /etc/s-box/subport.log 2>/dev/null) -h /root/websbox > /dev/null 2>&1 &"' >> /tmp/crontab.tmp
+echo '@reboot sleep 10 && /bin/bash -c "busybox httpd -f -p 127.0.0.1:$(cat /etc/s-box/subport.log 2>/dev/null) -h /root/websbox > /dev/null 2>&1 &"' >> /tmp/crontab.tmp
 crontab /tmp/crontab.tmp >/dev/null 2>&1
 rm /tmp/crontab.tmp
 fi
@@ -3372,6 +3383,23 @@ changeserv
 fi
 }
 
+gitlab_push_secure(){
+local refspec=${1:-main} askpass status=0
+[ -f /etc/s-box/.secrets/gitlab-token ] || return 1
+askpass=$(mktemp /etc/s-box/.secrets/git-askpass.XXXXXX) || return 1
+cat > "$askpass" <<'EOF'
+#!/bin/sh
+case "$1" in
+  *Username*) printf '%s\n' oauth2 ;;
+  *) cat "$SBYG_GITLAB_TOKEN_FILE" ;;
+esac
+EOF
+chmod 700 "$askpass" || { rm -f "$askpass"; return 1; }
+SBYG_GITLAB_TOKEN_FILE=/etc/s-box/.secrets/gitlab-token GIT_ASKPASS="$askpass" GIT_TERMINAL_PROMPT=0 git push -f origin "$refspec" || status=$?
+rm -f "$askpass"
+return "$status"
+}
+
 gitlabsub(){
 echo
 green "请确保Gitlab官网上已建立项目，已开启推送功能，已获取访问令牌"
@@ -3381,7 +3409,7 @@ readp "请选择【0-1】：" menu
 if [ "$menu" = "1" ]; then
 cd /etc/s-box
 readp "输入登录邮箱: " email
-readp "输入访问令牌: " token
+readsp "输入访问令牌: " token
 readp "输入用户名: " userid
 readp "输入项目名: " project
 echo
@@ -3398,31 +3426,24 @@ gitlab_ml=":${gitlabml}"
 git_sk="${gitlabml}"
 echo "${gitlab_ml}" > /etc/s-box/gitlab_ml_ml
 fi
-echo "$token" > /etc/s-box/gitlabtoken.txt
+sbyg_write_secret /etc/s-box/.secrets/gitlab-token "$token" || return 1
+rm -f /etc/s-box/gitlabtoken.txt /etc/s-box/gitpush.sh
 rm -rf /etc/s-box/.git
 git init >/dev/null 2>&1
 git add sbox.json clmi.yaml jhsub.txt >/dev/null 2>&1
-git config --global user.email "${email}" >/dev/null 2>&1
-git config --global user.name "${userid}" >/dev/null 2>&1
+git config user.email "${email}" >/dev/null 2>&1
+git config user.name "${userid}" >/dev/null 2>&1
 git commit -m "commit_add_$(date +"%F %T")" >/dev/null 2>&1
 branches=$(git branch)
 if [[ $branches == *master* ]]; then
 git branch -m master main >/dev/null 2>&1
 fi
-git remote add origin https://${token}@gitlab.com/${userid}/${project}.git >/dev/null 2>&1
+git remote add origin https://gitlab.com/${userid}/${project}.git >/dev/null 2>&1
 if [[ $(ls -a | grep '^\.git$') ]]; then
-cat > /etc/s-box/gitpush.sh <<EOF
-#!/usr/bin/expect
-spawn bash -c "git push -f origin main${gitlab_ml}"
-expect "Password for 'https://$(cat /etc/s-box/gitlabtoken.txt 2>/dev/null)@gitlab.com':"
-send "$(cat /etc/s-box/gitlabtoken.txt 2>/dev/null)\r"
-interact
-EOF
-chmod +x gitpush.sh
-./gitpush.sh "git push -f origin main${gitlab_ml}" cat /etc/s-box/gitlabtoken.txt >/dev/null 2>&1
-echo "https://gitlab.com/api/v4/projects/${userid}%2F${project}/repository/files/sbox.json/raw?ref=${git_sk}&private_token=${token}" > /etc/s-box/sing_box_gitlab.txt
-echo "https://gitlab.com/api/v4/projects/${userid}%2F${project}/repository/files/clmi.yaml/raw?ref=${git_sk}&private_token=${token}" > /etc/s-box/clash_meta_gitlab.txt
-echo "https://gitlab.com/api/v4/projects/${userid}%2F${project}/repository/files/jhsub.txt/raw?ref=${git_sk}&private_token=${token}" > /etc/s-box/jh_sub_gitlab.txt
+gitlab_push_secure "main${gitlab_ml}" >/dev/null 2>&1 || { red "GitLab push failed"; return 1; }
+sbyg_write_secret /etc/s-box/sing_box_gitlab.txt "https://gitlab.com/api/v4/projects/${userid}%2F${project}/repository/files/sbox.json/raw?ref=${git_sk}&private_token=${token}"
+sbyg_write_secret /etc/s-box/clash_meta_gitlab.txt "https://gitlab.com/api/v4/projects/${userid}%2F${project}/repository/files/clmi.yaml/raw?ref=${git_sk}&private_token=${token}"
+sbyg_write_secret /etc/s-box/jh_sub_gitlab.txt "https://gitlab.com/api/v4/projects/${userid}%2F${project}/repository/files/jhsub.txt/raw?ref=${git_sk}&private_token=${token}"
 clsbshow
 else
 yellow "设置Gitlab订阅链接失败，请反馈"
@@ -3443,8 +3464,7 @@ git rm --cached sbox.json clmi.yaml jhsub.txt >/dev/null 2>&1
 git commit -m "commit_rm_$(date +"%F %T")" >/dev/null 2>&1
 git add sbox.json clmi.yaml jhsub.txt >/dev/null 2>&1
 git commit -m "commit_add_$(date +"%F %T")" >/dev/null 2>&1
-chmod +x gitpush.sh
-./gitpush.sh "git push -f origin main${gitlab_ml}" cat /etc/s-box/gitlabtoken.txt >/dev/null 2>&1
+gitlab_push_secure "main${gitlab_ml}" >/dev/null 2>&1 || { red "GitLab push failed"; return 1; }
 clsbshow
 else
 yellow "未设置Gitlab订阅链接"
@@ -3455,25 +3475,23 @@ cd
 clsbshow(){
 green "当前Sing-box节点已更新并推送"
 green "Sing-box订阅链接如下："
-blue "$(cat /etc/s-box/sing_box_gitlab.txt 2>/dev/null)"
+blue "$(sbyg_redact_url "$(cat /etc/s-box/sing_box_gitlab.txt 2>/dev/null)")"
 echo
-green "Sing-box订阅链接二维码如下："
-qrencode -o - -t ANSIUTF8 "$(cat /etc/s-box/sing_box_gitlab.txt 2>/dev/null)"
+yellow "完整私有订阅地址已保存在权限为600的本机文件中，不在终端显示二维码"
 echo
 echo "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
 echo
 green "当前Mihomo节点配置已更新并推送"
 green "Mihomo订阅链接如下："
-blue "$(cat /etc/s-box/clash_meta_gitlab.txt 2>/dev/null)"
+blue "$(sbyg_redact_url "$(cat /etc/s-box/clash_meta_gitlab.txt 2>/dev/null)")"
 echo
-green "Mihomo订阅链接二维码如下："
-qrencode -o - -t ANSIUTF8 "$(cat /etc/s-box/clash_meta_gitlab.txt 2>/dev/null)"
+yellow "完整私有订阅地址已保存在权限为600的本机文件中，不在终端显示二维码"
 echo
 echo "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
 echo
 green "当前聚合节点配置已更新并推送"
 green "订阅链接如下："
-blue "$(cat /etc/s-box/jh_sub_gitlab.txt 2>/dev/null)"
+blue "$(sbyg_redact_url "$(cat /etc/s-box/jh_sub_gitlab.txt 2>/dev/null)")"
 echo
 yellow "可以在网页上输入订阅链接查看配置内容，如果无配置内容，请自检Gitlab相关设置并重置"
 echo
@@ -4286,11 +4304,11 @@ if [ -s /etc/s-box/subport.log ]; then
 showsubport=$(cat /etc/s-box/subport.log)
 if ps -ef 2>/dev/null | grep "$showsubport" | grep -v grep >/dev/null; then
 showsubtoken=$(cat /etc/s-box/subtoken.log 2>/dev/null)
-subip=$(cat /etc/s-box/server_ip.log 2>/dev/null)
-suburl="$subip:$showsubport/$showsubtoken"
-echo "Clash/Mihomo本地IP订阅地址：http://$suburl/clmi.yaml"
-echo "Sing-box本地IP订阅地址：http://$suburl/sbox.json"
-echo "聚合协议本地IP订阅地址：http://$suburl/jhsub.txt"
+suburl="127.0.0.1:$showsubport/$(sbyg_redact "$showsubtoken")"
+echo "Clash/Mihomo本机回环订阅：http://$suburl/clmi.yaml"
+echo "Sing-box本机回环订阅：http://$suburl/sbox.json"
+echo "聚合协议本机回环订阅：http://$suburl/jhsub.txt"
+yellow "公网订阅必须通过已配置的 HTTPS 隧道或反向代理提供"
 fi
 fi
 if [ "$argoym" = "已开启" ]; then
