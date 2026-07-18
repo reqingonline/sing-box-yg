@@ -23,7 +23,7 @@ return 0
 done
 return 1
 }
-for sbyg_library in source download secrets transaction firewall subscription; do
+for sbyg_library in source download secrets transaction firewall subscription service; do
 sbyg_load_library "$sbyg_library" || true
 done
 declare -F sbyg_secure_defaults >/dev/null 2>&1 && sbyg_secure_defaults /etc/s-box
@@ -1024,37 +1024,18 @@ cp /etc/s-box/sb${num}.json /etc/s-box/sb.json
 }
 
 sbservice(){
+declare -F sbyg_service_render_systemd >/dev/null 2>&1 || { red "Service security module is unavailable"; return 1; }
 if command -v apk >/dev/null 2>&1; then
-echo '#!/sbin/openrc-run
-description="sing-box service"
-command="/etc/s-box/sing-box"
-command_args="run -c /etc/s-box/sb.json"
-command_background=true
-pidfile="/var/run/sing-box.pid"' > /etc/init.d/sing-box
-chmod +x /etc/init.d/sing-box
+sbyg_service_render_openrc /etc/init.d/sing-box /etc/s-box/sing-box /etc/s-box/sb.json /etc/s-box || return 1
 rc-update add sing-box default
 rc-service sing-box start
 else
-cat > /etc/systemd/system/sing-box.service <<EOF
-[Unit]
-After=network.target nss-lookup.target
-[Service]
-User=root
-WorkingDirectory=/root
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
-AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
-ExecStart=/etc/s-box/sing-box run -c /etc/s-box/sb.json
-ExecReload=/bin/kill -HUP \$MAINPID
-Restart=on-failure
-RestartSec=10
-LimitNOFILE=infinity
-[Install]
-WantedBy=multi-user.target
-EOF
+sbyg_service_render_systemd /etc/systemd/system/sing-box.service /etc/s-box/sing-box /etc/s-box/sb.json /etc/s-box || return 1
+sbyg_service_render_health_timer /etc/systemd/system/sing-box-yg-health.service /etc/systemd/system/sing-box-yg-health.timer /usr/local/lib/sing-box-yg/sb-doctor.sh || return 1
 systemctl daemon-reload
 systemctl enable sing-box >/dev/null 2>&1
+systemctl enable --now sing-box-yg-health.timer >/dev/null 2>&1
 systemctl start sing-box
-systemctl restart sing-box
 fi
 }
 
@@ -4026,18 +4007,24 @@ fi
 
 cronsb(){
 uncronsb
-crontab -l 2>/dev/null > /tmp/crontab.tmp
-if command -v apk >/dev/null 2>&1; then
-echo "0 1 * * * rc-service sing-box restart" >> /tmp/crontab.tmp
-else
-echo "0 1 * * * systemctl try-restart sing-box" >> /tmp/crontab.tmp
+if ! command -v apk >/dev/null 2>&1; then
+sbyg_service_render_health_timer /etc/systemd/system/sing-box-yg-health.service /etc/systemd/system/sing-box-yg-health.timer /usr/local/lib/sing-box-yg/sb-doctor.sh || return 1
+systemctl daemon-reload
+systemctl enable --now sing-box-yg-health.timer
+return
 fi
+crontab -l 2>/dev/null > /tmp/crontab.tmp
+echo "*/15 * * * * /usr/local/lib/sing-box-yg/sb-doctor.sh --repair >/dev/null 2>&1" >> /tmp/crontab.tmp
 crontab /tmp/crontab.tmp >/dev/null 2>&1
 rm /tmp/crontab.tmp
 }
 uncronsb(){
+if command -v systemctl >/dev/null 2>&1; then
+systemctl disable --now sing-box-yg-health.timer >/dev/null 2>&1 || true
+fi
 crontab -l 2>/dev/null > /tmp/crontab.tmp
 sed -i '/sing-box/d' /tmp/crontab.tmp
+sed -i '/sb-doctor/d' /tmp/crontab.tmp
 sed -i '/sbwpph/d' /tmp/crontab.tmp
 sed -i '/url http/d' /tmp/crontab.tmp
 sed -i '/websbox/d' /tmp/crontab.tmp
@@ -4151,7 +4138,8 @@ for svc in sing-box argo; do
 systemctl stop "$svc" >/dev/null 2>&1
 systemctl disable "$svc" >/dev/null 2>&1
 done
-rm -f /etc/systemd/system/sing-box.service /etc/systemd/system/argo.service
+rm -f /etc/systemd/system/sing-box.service /etc/systemd/system/argo.service \
+  /etc/systemd/system/sing-box-yg-health.service /etc/systemd/system/sing-box-yg-health.timer
 fi
 if [[ -f /etc/s-box/subscription-httpd.pid ]]; then
 subscription_pid=$(cat /etc/s-box/subscription-httpd.pid 2>/dev/null)
