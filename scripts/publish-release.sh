@@ -68,6 +68,8 @@ release_id=$(jq -r --arg tag "$release_tag" \
   '[.[] | select(.tag_name == $tag)][0].id // empty' "$workdir/releases.json")
 release_draft=$(jq -r --arg tag "$release_tag" \
   '[.[] | select(.tag_name == $tag)][0].draft // empty' "$workdir/releases.json")
+release_target=$(jq -r --arg tag "$release_tag" \
+  '[.[] | select(.tag_name == $tag)][0].target_commitish // empty' "$workdir/releases.json")
 
 existing_commit=
 if existing_commit=$(resolve_tag_commit); then
@@ -88,8 +90,14 @@ fi
 
 if [ -n "$release_id" ]; then
   test "$release_draft" = true
-  test -n "$existing_commit"
-  test "$existing_commit" = "$release_sha"
+  if [ -n "$existing_commit" ]; then
+    test "$existing_commit" = "$release_sha"
+  elif [ "$release_target" != "$release_sha" ]; then
+    jq -n --arg sha "$release_sha" '{target_commitish:$sha}' > "$workdir/retarget.json"
+    api_call "$workdir/retargeted.json" 200 --request PATCH \
+      --header 'Content-Type: application/json' --data-binary "@$workdir/retarget.json" \
+      "$api_url/repos/$GITHUB_REPOSITORY/releases/$release_id"
+  fi
 elif [ -n "$existing_commit" ]; then
   test "$existing_commit" = "$release_sha"
 fi
@@ -98,6 +106,7 @@ archive_name=${archive##*/}
 sums_name=${sums##*/}
 
 if [ -n "$release_id" ]; then
+  echo "Resuming draft Release $release_tag"
   jq -e --arg archive "$archive_name" --arg sums "$sums_name" --arg tag "$release_tag" \
     'all(.[] | select(.tag_name == $tag) | .assets[]; .name == $archive or .name == $sums)' \
     "$workdir/releases.json" >/dev/null
@@ -109,6 +118,7 @@ if [ -n "$release_id" ]; then
     '.[] | select(.tag_name == $tag) | .assets[] | select(.name == $archive or .name == $sums) | .id' \
     "$workdir/releases.json")
 else
+  echo "Creating draft Release $release_tag at $release_sha"
   jq -n --arg tag "$release_tag" --arg sha "$release_sha" \
     '{tag_name:$tag,target_commitish:$sha,name:$tag,draft:true,prerelease:false,generate_release_notes:true}' \
     > "$workdir/create.json"
@@ -116,8 +126,6 @@ else
     --header 'Content-Type: application/json' --data-binary "@$workdir/create.json" \
     "$api_url/repos/$GITHUB_REPOSITORY/releases"
   release_id=$(jq -er '.id' "$workdir/release.json")
-  existing_commit=$(resolve_tag_commit)
-  test "$existing_commit" = "$release_sha"
 fi
 
 upload_asset() {
@@ -135,9 +143,12 @@ upload_asset() {
 upload_asset "$archive" application/gzip
 upload_asset "$sums" text/plain
 
+echo "Publishing Release $release_tag"
 printf '{"draft":false}\n' > "$workdir/publish.json"
 api_call "$workdir/published.json" 200 --request PATCH \
   --header 'Content-Type: application/json' --data-binary "@$workdir/publish.json" \
   "$api_url/repos/$GITHUB_REPOSITORY/releases/$release_id"
 test "$(jq -r '.draft' "$workdir/published.json")" = false
+existing_commit=$(resolve_tag_commit)
+test "$existing_commit" = "$release_sha"
 jq -r '.html_url' "$workdir/published.json"
