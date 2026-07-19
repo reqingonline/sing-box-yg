@@ -67,8 +67,15 @@ grep -F 'server.listen(listenPort, "127.0.0.1"' "$repo_root/app.js"
 test "$(cat "$repo_root/RELEASE_VERSION")" = 'v1.0.0'
 grep -F 'branches:' "$repo_root/.github/workflows/release.yml"
 grep -F 'RELEASE_VERSION' "$repo_root/.github/workflows/release.yml"
+grep -F '.github/workflows/release.yml' "$repo_root/.github/workflows/release.yml"
 grep -F 'git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main' \
   "$repo_root/.github/workflows/release.yml"
+grep -F -- '--target "$GITHUB_SHA"' "$repo_root/.github/workflows/release.yml"
+if grep -F 'gh api --method POST "repos/$GITHUB_REPOSITORY/git/tags"' \
+  "$repo_root/.github/workflows/release.yml"; then
+  echo 'release workflow uses the failed standalone annotated-tag API path' >&2
+  exit 1
+fi
 if grep -E 'releases/latest/download/(cloudflared|geo(ip|site))' "$repo_root/sb.sh"; then
   echo 'release asset bypasses the GitHub digest check' >&2
   exit 1
