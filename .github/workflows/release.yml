@@ -8,6 +8,7 @@ on:
       - 'v*'
     paths:
       - RELEASE_VERSION
+      - .github/workflows/release.yml
   workflow_dispatch:
     inputs:
       release_tag:
@@ -58,24 +59,6 @@ jobs:
           sudo apt-get install -y jq shellcheck
       - name: Run security and regression preflight
         run: bash scripts/release-checks.sh
-      - name: Create verified annotated tag when releasing from main
-        if: github.ref_type != 'tag'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ steps.release.outputs.tag }}
-        run: |
-          set -euo pipefail
-          existing_ref=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" --jq '.object.sha' 2>/dev/null || true)
-          if [ -n "$existing_ref" ]; then
-            existing_commit=$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$existing_ref" --jq '.object.sha' 2>/dev/null || printf '%s' "$existing_ref")
-            test "$existing_commit" = "$GITHUB_SHA"
-          else
-            tag_object=$(gh api --method POST "repos/$GITHUB_REPOSITORY/git/tags" \
-              -f tag="$RELEASE_TAG" -f message="$RELEASE_TAG" \
-              -f object="$GITHUB_SHA" -f type=commit --jq '.sha')
-            gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
-              -f ref="refs/tags/$RELEASE_TAG" -f sha="$tag_object" >/dev/null
-          fi
       - name: Build deterministic source archive
         env:
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
@@ -94,9 +77,17 @@ jobs:
         run: |
           set -euo pipefail
           archive="sing-box-yg-${RELEASE_TAG}.tar.gz"
+          existing_ref=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" --jq '.object.sha' 2>/dev/null || true)
+          if [ -n "$existing_ref" ]; then
+            existing_commit=$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$existing_ref" --jq '.object.sha' 2>/dev/null || printf '%s' "$existing_ref")
+            test "$existing_commit" = "$GITHUB_SHA"
+          fi
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release upload "$RELEASE_TAG" "$archive" SHA256SUMS --clobber
-          else
+          elif [ -n "$existing_ref" ]; then
             gh release create "$RELEASE_TAG" "$archive" SHA256SUMS \
               --verify-tag --generate-notes --title "$RELEASE_TAG"
+          else
+            gh release create "$RELEASE_TAG" "$archive" SHA256SUMS \
+              --target "$GITHUB_SHA" --generate-notes --title "$RELEASE_TAG"
           fi

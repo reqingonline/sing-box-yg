@@ -13,7 +13,7 @@
 
 1. 在发布 PR 中把根目录 `RELEASE_VERSION` 更新为新的 `vX.Y.Z`。
 2. 运行 `bash scripts/release-checks.sh`，提交并合并 PR。
-3. `Verified release` 工作流先验证发布提交属于远端 `main` 历史，再在受保护的 `main` 提交上创建对应的 annotated tag，生成确定性源码包和 `SHA256SUMS`，再发布 Release。
+3. `Verified release` 工作流先验证发布提交属于远端 `main` 历史，再创建或核对指向该提交的 Release tag，生成确定性源码包和 `SHA256SUMS`，最后原子发布 Release 与资产。
 4. 工作流可以安全重跑：已有标签必须仍指向同一提交，已有 Release 资产会校验后覆盖。
 
 如果维护者已配置签名密钥，也可以手动创建签名标签；标签必须与 `RELEASE_VERSION` 完全一致：
