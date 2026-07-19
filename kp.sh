@@ -7,10 +7,14 @@
 # 必填变量：RES、REP、SSH_USER、SSH_PASS、HOST
 # 注意[]"",:这些符号不要乱删，按规律对齐
 # 每行一个{serv00服务器}，一个服务也可，末尾用,间隔，最后一个服务器末尾无需用,间隔
-ACCOUNTS='[
-{"RES":"n", "REP":"n", "SSH_USER":"你的serv00账号名", "SSH_PASS":"你的serv00账号密码", "REALITY":"你serv00账号名.serv00.net", "SUUID":"自设UUID", "TCP1_PORT":"vless的tcp端口", "TCP2_PORT":"vmess的tcp端口", "UDP_PORT":"hy2的udp端口", "HOST":"s1.serv00.com", "ARGO_DOMAIN":"", "ARGO_AUTH":""},
-{"RES":"y", "REP":"y", "SSH_USER":"123456", "SSH_PASS":"7890000", "REALITY":"time.is", "SUUID":"73203ee6-b3fa-4a3d-b5df-6bb2f55073ad", "TCP1_PORT":"", "TCP2_PORT":"", "UDP_PORT":"", "HOST":"s16.serv00.com", "ARGO_DOMAIN":"你的argo固定域名", "ARGO_AUTH":"eyJhIjoiOTM3YzFjYWI88552NTFiYTM4ZTY0ZDQzRmlNelF0TkRBd1pUQTRNVEJqTUdVeCJ9"}
-]'
+if [ -z "${ACCOUNTS:-}" ]; then
+  echo '请通过受保护的环境变量 ACCOUNTS 提供账号 JSON' >&2
+  exit 2
+fi
+printf '%s' "$ACCOUNTS" | jq -e 'type == "array" and length > 0' >/dev/null || {
+  echo 'ACCOUNTS 必须是非空 JSON 数组' >&2
+  exit 2
+}
 run_remote_command() {
 local RES=$1
 local REP=$2
@@ -24,14 +28,50 @@ local UDP_PORT=$9
 local HOST=${10}
 local ARGO_DOMAIN=${11}
 local ARGO_AUTH=${12}
+local script_root keep_script asset
+script_root=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+keep_script="$script_root/serv00keep.sh"
+for asset in serv00keep.sh app.js index.html; do
+  [ -r "$script_root/$asset" ] || {
+    echo "缺少本地 $asset，拒绝从未校验的远程分支直接执行" >&2
+    return 1
+  }
+done
   if [ -z "${ARGO_DOMAIN}" ]; then
     echo "Argo域名为空，申请Argo临时域名"
   else
     echo "Argo已设置固定域名：${ARGO_DOMAIN}"
   fi
-  remote_command="export reym=$REALITY UUID=$SUUID vless_port=$TCP1_PORT vmess_port=$TCP2_PORT hy2_port=$UDP_PORT reset=$RES resport=$REP ARGO_DOMAIN=${ARGO_DOMAIN} ARGO_AUTH=${ARGO_AUTH} && bash <(curl -Ls https://raw.githubusercontent.com/yonggekkk/sing-box-yg/main/serv00keep.sh)"
-  echo "Executing remote command on $HOST as $SSH_USER with command: $remote_command"
-  sshpass -p "$SSH_PASS" ssh -o StrictHostKeyChecking=no "$SSH_USER@$HOST" "$remote_command"
+  echo "正在安全部署 $HOST（敏感参数不会写入命令行或日志）"
+  tar -czf - -C "$script_root" \
+    serv00keep.sh app.js index.html serv00-assets.sha256 \
+    lib/cleanup.sh lib/secrets.sh | \
+    sbyg_ssh "$SSH_PASS" "$SSH_USER@$HOST" \
+      'umask 077; mkdir -p "$HOME/.local/share/sing-box-yg"; tar -xzf - -C "$HOME/.local/share/sing-box-yg"; chmod 700 "$HOME/.local/share/sing-box-yg/serv00keep.sh"'
+  {
+    printf 'export reym=%q UUID=%q vless_port=%q vmess_port=%q hy2_port=%q reset=%q resport=%q ARGO_DOMAIN=%q ARGO_AUTH=%q\n' \
+      "$REALITY" "$SUUID" "$TCP1_PORT" "$TCP2_PORT" "$UDP_PORT" "$RES" "$REP" "$ARGO_DOMAIN" "$ARGO_AUTH"
+    printf 'export SBYG_ASSET_DIR="$HOME/.local/share/sing-box-yg"\n'
+    printf 'bash "$SBYG_ASSET_DIR/serv00keep.sh"\n'
+  } | sbyg_ssh "$SSH_PASS" "$SSH_USER@$HOST" 'bash -s'
+}
+sbyg_ssh() {
+  local password=$1 known_hosts=${SBYG_KNOWN_HOSTS_FILE:-}
+  local -a host_key_options
+  shift
+  if [ -n "$known_hosts" ]; then
+    [ -s "$known_hosts" ] || {
+      echo '指定的 SSH known_hosts 文件不存在或为空' >&2
+      return 2
+    }
+    host_key_options=(-o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known_hosts")
+  elif [ "${CI:-}" = true ]; then
+    echo 'CI 环境必须提供 SBYG_KNOWN_HOSTS_FILE，拒绝盲目信任主机密钥' >&2
+    return 2
+  else
+    host_key_options=(-o StrictHostKeyChecking=accept-new)
+  fi
+  sshpass -d 3 ssh "${host_key_options[@]}" "$@" 3<<<"$password"
 }
 if  cat /etc/issue /proc/version /etc/os-release 2>/dev/null | grep -q -E -i "openwrt"; then
 opkg update
@@ -47,56 +87,59 @@ else
     elif [ -f /etc/alpine-release ]; then
         package_manager="apk add"
     fi
-    $package_manager sshpass curl jq cron >/dev/null 2>&1 &
+    $package_manager sshpass curl jq cron >/dev/null 2>&1
 fi
 echo "*****************************************************"
 echo "*****************************************************"
-echo "甬哥Github项目  ：github.com/yonggekkk"
-echo "甬哥Blogger博客 ：ygkkk.blogspot.com"
-echo "甬哥YouTube频道 ：www.youtube.com/@ygkkk"
+echo "维护仓库：github.com/reqingonline/sing-box-yg"
 echo "自动远程部署Serv00三合一协议脚本【VPS+软路由】"
 echo "版本：V25.3.26"
 echo "*****************************************************"
 echo "*****************************************************"
               count=0  
-           for account in $(echo "${ACCOUNTS}" | jq -c '.[]'); do
+           while IFS= read -r account; do
               count=$((count+1))
-              RES=$(echo $account | jq -r '.RES')
-              REP=$(echo $account | jq -r '.REP')              
-              SSH_USER=$(echo $account | jq -r '.SSH_USER')
-              SSH_PASS=$(echo $account | jq -r '.SSH_PASS')
-              REALITY=$(echo $account | jq -r '.REALITY')
-              SUUID=$(echo $account | jq -r '.SUUID')
-              TCP1_PORT=$(echo $account | jq -r '.TCP1_PORT')
-              TCP2_PORT=$(echo $account | jq -r '.TCP2_PORT')
-              UDP_PORT=$(echo $account | jq -r '.UDP_PORT')
-              HOST=$(echo $account | jq -r '.HOST')
-              ARGO_DOMAIN=$(echo $account | jq -r '.ARGO_DOMAIN')
-              ARGO_AUTH=$(echo $account | jq -r '.ARGO_AUTH') 
-          if sshpass -p "$SSH_PASS" ssh -o StrictHostKeyChecking=no "$SSH_USER@$HOST" -q exit; then
-            echo "🎉恭喜！✅第【$count】台服务器连接成功！🚀服务器地址：$HOST ，账户名：$SSH_USER"   
+              RES=$(jq -r '.RES // "" | tostring' <<<"$account")
+              REP=$(jq -r '.REP // "" | tostring' <<<"$account")
+              SSH_USER=$(jq -er '.SSH_USER | strings' <<<"$account")
+              SSH_PASS=$(jq -er '.SSH_PASS | strings' <<<"$account")
+              REALITY=$(jq -r '.REALITY // "" | tostring' <<<"$account")
+              SUUID=$(jq -r '.SUUID // "" | tostring' <<<"$account")
+              TCP1_PORT=$(jq -r '.TCP1_PORT // "" | tostring' <<<"$account")
+              TCP2_PORT=$(jq -r '.TCP2_PORT // "" | tostring' <<<"$account")
+              UDP_PORT=$(jq -r '.UDP_PORT // "" | tostring' <<<"$account")
+              HOST=$(jq -er '.HOST | strings' <<<"$account")
+              ARGO_DOMAIN=$(jq -r '.ARGO_DOMAIN // "" | tostring' <<<"$account")
+              ARGO_AUTH=$(jq -r '.ARGO_AUTH // "" | tostring' <<<"$account")
+              case "$SSH_USER" in ''|*[!A-Za-z0-9._-]*) echo '账号名格式无效' >&2; continue ;; esac
+              case "$HOST" in ''|*[!A-Za-z0-9.-]*) echo '主机名格式无效' >&2; continue ;; esac
+          if sbyg_ssh "$SSH_PASS" "$SSH_USER@$HOST" -q exit; then
+            echo "第 $count 台服务器连接成功（地址和账号已隐藏）"
           if [ -z "${ARGO_DOMAIN}" ]; then
            check_process="ps aux | grep '[c]onfig' > /dev/null && ps aux | grep [l]ocalhost:$TCP2_PORT > /dev/null"
             else
-           check_process="ps aux | grep '[c]onfig' > /dev/null && ps aux | grep '[t]oken $ARGO_AUTH' > /dev/null"
+           check_process="ps aux | grep '[c]onfig' > /dev/null && ps aux | grep '[c]loudflared.*tunnel' > /dev/null"
            fi
-          if ! sshpass -p "$SSH_PASS" ssh -o StrictHostKeyChecking=no "$SSH_USER@$HOST" "$check_process" || [[ "$RES" =~ ^[Yy]$ ]]; then
+          if ! sbyg_ssh "$SSH_PASS" "$SSH_USER@$HOST" "$check_process" || [[ "$RES" =~ ^[Yy]$ ]]; then
             echo "⚠️检测到主进程或者argo进程未启动，或者执行重置"
              echo "⚠️现在开始修复或重置部署……请稍等"
-             output=$(run_remote_command "$RES" "$REP" "$SSH_USER" "$SSH_PASS" "${REALITY}" "$SUUID" "$TCP1_PORT" "$TCP2_PORT" "$UDP_PORT" "$HOST" "${ARGO_DOMAIN}" "${ARGO_AUTH}")
-            echo "远程命令执行结果：$output"
+             if run_remote_command "$RES" "$REP" "$SSH_USER" "$SSH_PASS" "${REALITY}" "$SUUID" "$TCP1_PORT" "$TCP2_PORT" "$UDP_PORT" "$HOST" "${ARGO_DOMAIN}" "${ARGO_AUTH}" >/dev/null; then
+               echo "远程修复完成（敏感输出已隐藏）"
+             else
+               echo "远程修复失败（敏感输出已隐藏）" >&2
+             fi
           else
             echo "🎉恭喜！✅检测到所有进程正常运行中 "
             SSH_USER_LOWER=$(echo "$SSH_USER" | tr '[:upper:]' '[:lower:]')
-            sshpass -p "$SSH_PASS" ssh -o StrictHostKeyChecking=no "$SSH_USER@$HOST" "
+            sbyg_ssh "$SSH_PASS" "$SSH_USER@$HOST" "
             echo \"配置显示如下：\"
-            cat domains/${SSH_USER_LOWER}.serv00.net/logs/list.txt
+            test -s domains/${SSH_USER_LOWER}.serv00.net/logs/config.json
             echo \"====================================================\""
             fi
            else
             echo "===================================================="
-            echo "💥杯具！❌第【$count】台服务器连接失败！🚀服务器地址：$HOST ，账户名：$SSH_USER"
+            echo "第 $count 台服务器连接失败（地址和账号已隐藏）"
             echo "⚠️可能账号名、密码、服务器名称输入错误，或者当前服务器在维护中"  
             echo "===================================================="
            fi
-            done
+            done < <(printf '%s' "$ACCOUNTS" | jq -c '.[]')

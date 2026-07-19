@@ -1,3 +1,29 @@
+# reqingonline/sing-box-yg 安全维护版
+
+本 fork 默认使用经过 `SHA256SUMS` 校验的 GitHub Release，禁止把可变的 `main` 分支直接下载后交给 shell 执行。生产 VPS 请使用稳定版或固定标签；`main` 仅供开发测试。
+
+## 新 VPS 安装（推荐：固定版本）
+
+先在 [Releases](https://github.com/reqingonline/sing-box-yg/releases) 选择标签，例如 `v1.0.0`，再执行：
+
+```bash
+tag=v1.0.0
+curl -fLO "https://github.com/reqingonline/sing-box-yg/releases/download/${tag}/sing-box-yg-${tag}.tar.gz"
+curl -fLO "https://github.com/reqingonline/sing-box-yg/releases/download/${tag}/SHA256SUMS"
+grep " sing-box-yg-${tag}.tar.gz$" SHA256SUMS | sha256sum -c -
+tar -xzf "sing-box-yg-${tag}.tar.gz"
+sudo bash "sing-box-yg-${tag}/scripts/install.sh" --version "$tag"
+sudo sb
+```
+
+安装器会再次下载并校验发布包，然后原子替换项目目录。稳定版升级使用 `sb` 菜单 7；固定版本回滚使用同一安装器的 `--version vX.Y.Z`。运行诊断：
+
+```bash
+sudo /usr/local/lib/sing-box-yg/scripts/sb-doctor.sh
+```
+
+支持 Ubuntu 22.04/24.04、Debian 12、Alpine 3.20；支持 amd64、arm64 和 armv7。配置和密钥位于 `/etc/s-box`，安装程序位于 `/usr/local/lib/sing-box-yg`。订阅服务默认只监听回环地址；公开订阅必须使用 HTTPS。详见 [安全边界](docs/SECURITY.md)、[旧版迁移](docs/MIGRATION.md) 和 [发布流程](docs/RELEASE.md)。
+
 ### 一、Sing-box-yg精装桶一键五协议共存脚本（VPS专用）
 ### 二、Serv00/Hostuno-sb-yg多平台一键三协议共存脚本（Serv00/Hostuno专用）
 
@@ -41,13 +67,7 @@
 
 ### VPS专用一键脚本如下：快捷方式：```sb```
 
-```
-bash <(wget -qO- https://raw.githubusercontent.com/yonggekkk/sing-box-yg/main/sb.sh)
-```
-或者
-```
-bash <(curl -Ls https://raw.githubusercontent.com/yonggekkk/sing-box-yg/main/sb.sh)
-```
+请使用本文开头的 Release 校验安装方式。旧的 `curl | bash` / `wget | bash` 安装方式已停用。
 
 ### Sing-box-yg脚本界面预览图（注：相关参数随意填写，仅供围观）
 
@@ -85,9 +105,11 @@ bash <(curl -Ls https://raw.githubusercontent.com/yonggekkk/sing-box-yg/main/sb.
 
 * Argo高度自定义：可以重置临时隧道; 可以继续使用上回的固定隧道; 也可以更换固定隧道的域名或token
 
-```
-bash <(curl -Ls https://raw.githubusercontent.com/yonggekkk/sing-box-yg/main/serv00.sh)
-```
+Serv00 也必须从已校验的 Release 包运行：解压后执行 `bash sing-box-yg-<TAG>/serv00.sh`。脚本会校验 Serv00/FreeBSD 二进制的固定 SHA-256，校验失败即停止，不会执行被替换的远程文件。GitHub 保活请把 `serv00.yml` 复制为工作流，将账号 JSON 保存到仓库 Secret `SERV00_ACCOUNTS`，并把服务器的 OpenSSH `known_hosts` 内容保存到 `SERV00_KNOWN_HOSTS`；账号、密码和主机指纹都不要写进 YAML。
+
+Serv00 网页功能统一使用节点 UUID 作为访问路径令牌，例如 `https://主机/up/<UUID>`、`/re/<UUID>`、`/rp/<UUID>`、`/jc/<UUID>` 和 `/list/<UUID>`。`/jc` 只返回本项目的布尔健康状态，不再公开系统进程命令行。把完整保活 URL 仅保存到 GitHub Secret，不要公开、截图或写入仓库；旧的不带令牌路径会返回 404。
+
+Serv00 的 Gemini 分流方案不再内置任何共享 WARP 私钥。若确实需要 WARP，请在运行脚本前通过环境变量提供用户自有设备参数：`SBYG_WARP_PRIVATE_KEY`、`SBYG_WARP_LOCAL_IPV4`、`SBYG_WARP_LOCAL_IPV6` 与三个逗号分隔整数的 `SBYG_WARP_RESERVED`；缺少任一参数时会安全降级为 `direct`，不会使用仓库中的公共凭据。
 
 #### Serv00/Hostuno-sb-yg脚本界面预览图，仅限方案一的SSH端安装脚本（注：仅供围观）
 ![a6b776a094566ab14e88fdcd70ba9e9](https://github.com/user-attachments/assets/90a918ed-aec7-4a1f-8159-97f3acfd0092)

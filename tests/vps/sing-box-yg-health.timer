@@ -1,8 +1,10 @@
 [Unit]
-Description=Hourly sing-box-yg health sample
+Description=sing-box-yg health check every 15 minutes
 
 [Timer]
-OnCalendar=hourly
+OnBootSec=5min
+OnUnitActiveSec=15min
+RandomizedDelaySec=30s
 Persistent=true
 Unit=sing-box-yg-health.service
 

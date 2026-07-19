@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+case ${1-} in
+  version)
+    echo 'sing-box version 1.14.0'
+    ;;
+  check)
+    shift
+    [ "${1-}" = -c ] && [ -f "${2-}" ]
+    jq -e '.test_invalid != true' "$2" >/dev/null
+    ;;
+  run)
+    shift
+    [ "${1-}" = -c ] && [ -f "${2-}" ]
+    jq -e '.test_invalid != true' "$2" >/dev/null
+    trap 'exit 0' INT TERM
+    while :; do sleep 1; done
+    ;;
+  *)
+    echo "unsupported fake core command: ${1-}" >&2
+    exit 2
+    ;;
+esac

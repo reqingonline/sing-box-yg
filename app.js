@@ -1,96 +1,132 @@
-require('dotenv').config();
-const express = require("express");
-const { spawn, exec } = require("child_process");
-const app = express();
-app.use(express.json());
-const commandToRun = "cd ~ && bash serv00keep.sh";
-function runCustomCommand() {
-    exec(commandToRun, (err, stdout, stderr) => {
-        if (err) console.error("执行错误:", err);
-        else console.log("执行成功:", stdout);
-    });
+"use strict";
+
+const crypto = require("crypto");
+const fs = require("fs");
+const http = require("http");
+const os = require("os");
+const path = require("path");
+const { spawn } = require("child_process");
+
+const home = os.homedir();
+const username = (process.env.SBYG_SERV00_USER || os.userInfo().username).toLowerCase();
+const configuredPort = Number.parseInt(process.env.SBYG_APP_PORT || "3000", 10);
+const listenPort = Number.isInteger(configuredPort) && configuredPort >= 0 && configuredPort <= 65535
+  ? configuredPort
+  : 3000;
+const workdir = path.join(home, "domains", `${username}.serv00.net`, "logs");
+const keepScript = path.join(home, "serv00keep.sh");
+const portScript = path.join(home, "webport.sh");
+const tokenFile = path.join(workdir, "UUID.txt");
+const listFile = path.join(workdir, "list.txt");
+const activeTasks = new Set();
+
+function readAccessToken() {
+  try {
+    const token = fs.readFileSync(tokenFile, "utf8").trim();
+    return token.length >= 8 && token.length <= 128 ? token : "";
+  } catch {
+    return "";
+  }
 }
-app.get("/up", (req, res) => {
-    runCustomCommand();
-    res.type("html").send("<pre>Serv00-name服务器网页保活启动：Serv00-name！UP！UP！UP！</pre>");
-});
-app.get("/re", (req, res) => {
-    const additionalCommands = `
-        USERNAME=$(whoami | tr '[:upper:]' '[:lower:]')
-        FULL_PATH="/home/\${USERNAME}/domains/\${USERNAME}.serv00.net/logs"
-        cd "\$FULL_PATH"
-        pkill -f 'run -c con' || echo "无进程可终止，准备执行重启……"
-        sbb="\$(cat sb.txt 2>/dev/null)"
-        nohup ./"\$sbb" run -c config.json >/dev/null 2>&1 &
-        sleep 2
-        (cd ~ && bash serv00keep.sh >/dev/null 2>&1) &  
-        echo '主程序重启成功，请检测三个主节点是否可用，如不可用，可再次刷新重启网页或者重置端口'
-    `;
-    exec(additionalCommands, (err, stdout, stderr) => {
-        console.log('stdout:', stdout);
-        console.error('stderr:', stderr);
-        if (err) {
-            return res.status(500).send(`错误：${stderr || stdout}`);
-        }
-        res.type('text').send(stdout);
-    });
-}); 
 
-const changeportCommands = "cd ~ && bash webport.sh"; 
-function runportCommand() {
-exec(changeportCommands, { maxBuffer: 1024 * 1024 * 10 }, (err, stdout, stderr) => {
-        console.log('stdout:', stdout);
-        console.error('stderr:', stderr);
-        if (err) {
-            console.error('Execution error:', err);
-            return res.status(500).send(`错误：${stderr || stdout}`);
-        }
-        if (stderr) {
-            console.error('stderr output:', stderr);
-            return res.status(500).send(`stderr: ${stderr}`);
-        }
-        res.type('text').send(stdout);
-    });
+function tokenMatches(candidate) {
+  const expected = readAccessToken();
+  if (!expected || !candidate) return false;
+  const actualBuffer = Buffer.from(candidate);
+  const expectedBuffer = Buffer.from(expected);
+  return actualBuffer.length === expectedBuffer.length &&
+    crypto.timingSafeEqual(actualBuffer, expectedBuffer);
 }
-app.get("/rp", (req, res) => {
-   runportCommand();  
-   res.type("html").send("<pre>重置三个节点端口完成！请立即关闭本网页并稍等20秒，将主页后缀改为  /list/你的uuid  可查看更新端口后的节点及订阅信息</pre>");
-});
-app.get("/list/key", (req, res) => {
-    const listCommands = `
-        USERNAME=$(whoami | tr '[:upper:]' '[:lower:]')
-        USERNAME1=$(whoami)
-        FULL_PATH="/home/\${USERNAME1}/domains/\${USERNAME}.serv00.net/logs/list.txt"
-        cat "\$FULL_PATH"
-    `;
-    exec(listCommands, (err, stdout, stderr) => {
-        if (err) {
-            console.error(`路径验证失败: ${stderr}`);
-            return res.status(404).send(stderr);
-        }
-        res.type('text').send(stdout);
-    });
+
+function writeResponse(res, status, body, contentType = "text/plain; charset=utf-8") {
+  res.writeHead(status, {
+    "Cache-Control": "no-store",
+    "Content-Type": contentType,
+    "Referrer-Policy": "no-referrer",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+  });
+  res.end(body);
+}
+
+function startTask(name, script) {
+  if (activeTasks.has(name)) return false;
+  activeTasks.add(name);
+  const child = spawn("bash", [script], {
+    cwd: home,
+    detached: true,
+    stdio: "ignore",
+  });
+  child.once("error", (error) => {
+    console.error(`${name} 启动失败:`, error.message);
+    activeTasks.delete(name);
+  });
+  child.once("exit", () => activeTasks.delete(name));
+  child.unref();
+  return true;
+}
+
+function parseRoute(req) {
+  try {
+    return new URL(req.url, "http://127.0.0.1").pathname
+      .split("/")
+      .filter(Boolean)
+      .map(decodeURIComponent);
+  } catch {
+    return [];
+  }
+}
+
+const server = http.createServer((req, res) => {
+  if (req.method !== "GET") {
+    writeResponse(res, 405, "仅支持 GET 请求\n");
+    return;
+  }
+
+  const route = parseRoute(req);
+  if (route.length !== 2 || !tokenMatches(route[1])) {
+    writeResponse(res, 404, "未找到资源\n");
+    return;
+  }
+
+  switch (route[0]) {
+    case "up":
+    case "re": {
+      const started = startTask("keep", keepScript);
+      writeResponse(res, 202, started ? "网页保活启动（任务已提交）\n" : "网页保活已在运行\n");
+      break;
+    }
+    case "rp": {
+      const started = startTask("ports", portScript);
+      writeResponse(res, 202, started ? "端口重置任务已提交\n" : "端口重置任务已在运行\n");
+      break;
+    }
+    case "jc": {
+      const status = {
+        keep_running: activeTasks.has("keep"),
+        port_reset_running: activeTasks.has("ports"),
+        config_present: fs.existsSync(path.join(workdir, "config.json")),
+        subscription_present: fs.existsSync(listFile),
+      };
+      writeResponse(res, 200, `${JSON.stringify(status)}\n`, "application/json; charset=utf-8");
+      break;
+    }
+    case "list":
+      try {
+        writeResponse(res, 200, fs.readFileSync(listFile, "utf8"));
+      } catch {
+        writeResponse(res, 404, "订阅尚未生成\n");
+      }
+      break;
+    default:
+      writeResponse(res, 404, "未找到资源\n");
+  }
 });
 
-app.get("/jc", (req, res) => {
-    const ps = spawn("ps", ["aux"]);
-    res.type("text");
-    ps.stdout.on("data", (data) => res.write(data));
-    ps.stderr.on("data", (data) => res.write(`Error: ${data}`));
-    ps.on("close", (code) => {
-        if (code !== 0) {
-            res.status(500).send(`ps aux 进程退出，错误码: ${code}`);
-        } else {
-            res.end();
-        }
-    });
-});
-
-app.use((req, res) => {
-    res.status(404).send('请在浏览器地址：http://where.name.serv00.net 后面加三种路径功能：/up是保活，/re是重启，/rp是重置节点端口，/jc是查看当前系统进程，/list/你的uuid 是节点及订阅信息');
-});
-setInterval(runCustomCommand, (2 * 60 + 15) * 60 * 1000);
-app.listen(3000, () => {
-    console.log("服务器运行在端口 3000");
-    runCustomCommand();
+if (process.env.SBYG_DISABLE_AUTO_KEEP !== "1") {
+  setInterval(() => startTask("keep", keepScript), (2 * 60 + 15) * 60 * 1000).unref();
+}
+server.listen(listenPort, "127.0.0.1", () => {
+  console.log(`Serv00 保活服务仅监听 127.0.0.1:${server.address().port}`);
+  if (process.env.SBYG_DISABLE_AUTO_KEEP !== "1") startTask("keep", keepScript);
 });

@@ -1,6 +1,13 @@
 [Unit]
-Description=Sing-box-yg health sample
+Description=sing-box-yg validated health repair
+After=network-online.target sing-box.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/lib/sing-box-yg/monitor-health.sh
+UMask=0077
+ExecStart=/usr/local/lib/sing-box-yg/sb-doctor.sh --repair
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=read-only
+ProtectSystem=strict
+ReadWritePaths=/etc/s-box /var/lib/sing-box-yg /run

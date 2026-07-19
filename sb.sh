@@ -12,6 +12,31 @@ yellow(){ echo -e "\033[33m\033[01m$1\033[0m";}
 blue(){ echo -e "\033[36m\033[01m$1\033[0m";}
 white(){ echo -e "\033[37m\033[01m$1\033[0m";}
 readp(){ read -p "$(yellow "$1")" $2;}
+readsp(){ read -r -s -p "$(yellow "$1")" "$2"; echo; }
+sbyg_load_library(){
+local name=$1 root script_root
+script_root=$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)
+for root in "${SBYG_LIB_DIR:-}" /usr/lib/sing-box-yg /etc/s-box/lib "$script_root/lib"; do
+[[ -n "$root" && -r "$root/$name.sh" ]] || continue
+. "$root/$name.sh"
+return 0
+done
+return 1
+}
+for sbyg_library in source download secrets transaction firewall subscription service config; do
+sbyg_load_library "$sbyg_library" || true
+done
+declare -F sbyg_secure_defaults >/dev/null 2>&1 && sbyg_secure_defaults /etc/s-box
+sbyg_installed_core_version(){
+${SING_BOX_BIN:-/etc/s-box/sing-box} version 2>/dev/null | awk '/version/{print $NF; exit}'
+}
+sbyg_refresh_active_config(){
+local core_version template
+declare -F sbyg_config_prepare >/dev/null 2>&1 || return 1
+core_version=$(sbyg_installed_core_version) || return 1
+template=$(sbyg_config_template_name "$core_version") || return 1
+sbyg_config_prepare "/etc/s-box/$template" /etc/s-box/sb.json "$core_version"
+}
 [[ $EUID -ne 0 ]] && yellow "请以root模式运行脚本" && exit
 stty erase $'\b' 2>/dev/null || stty erase '^H' 2>/dev/null
 #[[ -e /etc/hosts ]] && grep -qE '^ *172.65.251.78 gitlab.com' /etc/hosts || echo -e '\n172.65.251.78 gitlab.com' >> /etc/hosts
@@ -144,20 +169,20 @@ fi
 fi
 fi
 v4v6(){
-v4=$(curl -s4m5 icanhazip.com -k)
-v6=$(curl -s6m5 icanhazip.com -k)
-v4dq=$(curl -s4m5 -k https://myip.ipip.net | awk -F'来自于：' '{print $2}' 2>/dev/null)
-#v4dq=$(curl -s4m5 -k https://ip.fm | sed -n 's/.*Location: //p' 2>/dev/null)
-v6dq=$(curl -s6m5 -k https://ip.fm | sed -n 's/.*Location: //p' 2>/dev/null)
+v4=$(curl -fsS4m5 https://icanhazip.com)
+v6=$(curl -fsS6m5 https://icanhazip.com)
+v4dq=$(curl -fsS4m5 https://myip.ipip.net | awk -F'来自于：' '{print $2}' 2>/dev/null)
+#v4dq=$(curl -fsS4m5 https://ip.fm | sed -n 's/.*Location: //p' 2>/dev/null)
+v6dq=$(curl -fsS6m5 https://ip.fm | sed -n 's/.*Location: //p' 2>/dev/null)
 }
 warpcheck(){
-wgcfv6=$(curl -s6m5 https://www.cloudflare.com/cdn-cgi/trace -k | grep warp | cut -d= -f2)
-wgcfv4=$(curl -s4m5 https://www.cloudflare.com/cdn-cgi/trace -k | grep warp | cut -d= -f2)
+wgcfv6=$(curl -fsS6m5 https://www.cloudflare.com/cdn-cgi/trace | grep warp | cut -d= -f2)
+wgcfv4=$(curl -fsS4m5 https://www.cloudflare.com/cdn-cgi/trace | grep warp | cut -d= -f2)
 }
 
 v6(){
 v4orv6(){
-if [ -z "$(curl -s4m5 icanhazip.com -k)" ]; then
+if [ -z "$(curl -fsS4m5 https://icanhazip.com)" ]; then
 echo
 red "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
 yellow "检测到 纯IPV6 VPS，添加NAT64"
@@ -166,7 +191,7 @@ ipv=prefer_ipv6
 else
 ipv=prefer_ipv4
 fi
-if [ -n "$(curl -s6m5 icanhazip.com -k)" ]; then
+if [ -n "$(curl -fsS6m5 https://icanhazip.com)" ]; then
 endip="2606:4700:d0::a29f:c001"
 else
 endip="162.159.192.1"
@@ -187,24 +212,9 @@ fi
 }
 
 close(){
-systemctl stop firewalld.service >/dev/null 2>&1
-systemctl disable firewalld.service >/dev/null 2>&1
-setenforce 0 >/dev/null 2>&1
-ufw disable >/dev/null 2>&1
-iptables -P INPUT ACCEPT >/dev/null 2>&1
-iptables -P FORWARD ACCEPT >/dev/null 2>&1
-iptables -P OUTPUT ACCEPT >/dev/null 2>&1
-iptables -t mangle -F >/dev/null 2>&1
-iptables -F >/dev/null 2>&1
-iptables -X >/dev/null 2>&1
-netfilter-persistent save >/dev/null 2>&1
-if [[ -n $(apachectl -v 2>/dev/null) ]]; then
-systemctl stop httpd.service >/dev/null 2>&1
-systemctl disable httpd.service >/dev/null 2>&1
-service apache2 stop >/dev/null 2>&1
-systemctl disable apache2 >/dev/null 2>&1
-fi
-sleep 1
+yellow "Compatibility mode no longer disables the host firewall or web services."
+firewall_hint
+return 0
 green "兼容模式已关闭系统防火墙，请自行确认 VPS 后台安全组和端口暴露"
 }
 
@@ -241,18 +251,37 @@ install -m "$mode" "$source" "${destination}.new" || return 1
 mv -f "${destination}.new" "$destination"
 }
 
-install_geo_databases(){
-local database_dir=${GEO_DATABASE_DIR:-/root} asset tmp
-for asset in geoip geosite; do
-tmp=$(download_to_temp "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/${asset}.db" "$database_dir/${asset}.db") || return 1
-atomic_install "$tmp" "$database_dir/${asset}.db" 644 || { rm -f "$tmp"; return 1; }
+install_github_latest_asset(){
+local repository=$1 asset=$2 destination=$3 mode=${4:-755} api tmp expected url actual
+api=$(mktemp) || return 1
+curl --fail --location --retry 2 --connect-timeout 10 --max-time 30 --proto '=https' \
+  -o "$api" "https://api.github.com/repos/$repository/releases/latest" || { rm -f "$api"; return 1; }
+expected=$(jq -r --arg name "$asset" '.assets[] | select(.name == $name) | .digest // empty' "$api")
+url=$(jq -r --arg name "$asset" '.assets[] | select(.name == $name) | .browser_download_url // empty' "$api")
+rm -f "$api"
+[[ "$expected" == sha256:* && "$url" == https://* ]] || return 1
+tmp=$(download_to_temp "$url" "$destination") || return 1
+actual=$(sha256sum "$tmp" | awk '{print $1}')
+if [ "$actual" != "${expected#sha256:}" ]; then
 rm -f "$tmp"
+red "下载校验失败：$asset"
+return 1
+fi
+atomic_install "$tmp" "$destination" "$mode" || { rm -f "$tmp"; return 1; }
+rm -f "$tmp"
+}
+
+install_geo_databases(){
+local database_dir=${GEO_DATABASE_DIR:-/root} asset
+for asset in geoip geosite; do
+install_github_latest_asset MetaCubeX/meta-rules-dat "${asset}.db" "$database_dir/${asset}.db" 644 || return 1
 done
 }
 
 update_sbyg_version(){
-local destination=${SBYG_VERSION_FILE:-/etc/s-box/v} tmp version version_file
-tmp=$(download_to_temp https://raw.githubusercontent.com/yonggekkk/sing-box-yg/main/version "$destination") || return 1
+local destination=${SBYG_VERSION_FILE:-/etc/s-box/v} tmp version version_file version_url
+version_url=$(sbyg_project_file_url version) || return 1
+tmp=$(download_to_temp "$version_url" "$destination") || return 1
 version=$(awk -F "更新内容" 'NR == 1 {print $1}' "$tmp" | sed 's/[[:space:]]*$//')
 rm -f "$tmp"
 test -n "$version" || return 1
@@ -449,7 +478,9 @@ readp "请选择【1-2】：" menu
 if [ -z "$menu" ] || [ "$menu" = "1" ] ; then
 zqzs
 else
-bash <(curl -Ls https://raw.githubusercontent.com/yonggekkk/acme-yg/main/acme.sh)
+red "为避免执行未经校验的远程脚本，内置 ACME 一键安装已停用；继续使用自签证书"
+zqzs
+return 0
 if [[ ! -f /root/ygkkkca/cert.crt && ! -f /root/ygkkkca/private.key && ! -s /root/ygkkkca/cert.crt && ! -s /root/ygkkkca/private.key ]]; then
 red "Acme证书申请失败，继续使用自签证书" 
 zqzs
@@ -513,10 +544,10 @@ ports=()
 for i in {1..5}; do
 while true; do
 port=$(shuf -i 10000-65535 -n 1)
-if ! [[ " ${ports[@]} " =~ " $port " ]] && \
+if ! [[ " ${ports[*]} " =~ " $port " ]] && \
 [[ -z $(ss -tunlp | grep -w tcp | awk '{print $5}' | sed 's/.*://g' | grep -w "$port") ]] && \
 [[ -z $(ss -tunlp | grep -w udp | awk '{print $5}' | sed 's/.*://g' | grep -w "$port") ]]; then
-ports+=($port)
+ports+=("$port")
 break
 fi
 done
@@ -1019,42 +1050,22 @@ cat > /etc/s-box/sb11.json <<EOF
 }
 }
 EOF
-[[ "$sbnh" == "1.10" ]] && num=10 || num=11
-cp /etc/s-box/sb${num}.json /etc/s-box/sb.json
+sbyg_refresh_active_config || { red "Unable to render a configuration for the installed core"; return 1; }
 }
 
 sbservice(){
+declare -F sbyg_service_render_systemd >/dev/null 2>&1 || { red "Service security module is unavailable"; return 1; }
 if command -v apk >/dev/null 2>&1; then
-echo '#!/sbin/openrc-run
-description="sing-box service"
-command="/etc/s-box/sing-box"
-command_args="run -c /etc/s-box/sb.json"
-command_background=true
-pidfile="/var/run/sing-box.pid"' > /etc/init.d/sing-box
-chmod +x /etc/init.d/sing-box
+sbyg_service_render_openrc /etc/init.d/sing-box /etc/s-box/sing-box /etc/s-box/sb.json /etc/s-box || return 1
 rc-update add sing-box default
 rc-service sing-box start
 else
-cat > /etc/systemd/system/sing-box.service <<EOF
-[Unit]
-After=network.target nss-lookup.target
-[Service]
-User=root
-WorkingDirectory=/root
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
-AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
-ExecStart=/etc/s-box/sing-box run -c /etc/s-box/sb.json
-ExecReload=/bin/kill -HUP \$MAINPID
-Restart=on-failure
-RestartSec=10
-LimitNOFILE=infinity
-[Install]
-WantedBy=multi-user.target
-EOF
+sbyg_service_render_systemd /etc/systemd/system/sing-box.service /etc/s-box/sing-box /etc/s-box/sb.json /etc/s-box || return 1
+sbyg_service_render_health_timer /etc/systemd/system/sing-box-yg-health.service /etc/systemd/system/sing-box-yg-health.timer /usr/local/lib/sing-box-yg/sb-doctor.sh || return 1
 systemctl daemon-reload
 systemctl enable sing-box >/dev/null 2>&1
+systemctl enable --now sing-box-yg-health.timer >/dev/null 2>&1
 systemctl start sing-box
-systemctl restart sing-box
 fi
 }
 
@@ -1086,7 +1097,7 @@ echo "$server_ipcl" > /etc/s-box/server_ipcl.log
 fi
 else
 yellow "VPS并不是双栈VPS，不支持IP配置输出的切换"
-serip=$(curl -s4m5 icanhazip.com -k || curl -s6m5 icanhazip.com -k)
+serip=$(curl -fsS4m5 https://icanhazip.com || curl -fsS6m5 https://icanhazip.com)
 if [[ "$serip" =~ : ]]; then
 server_ip="[$serip]"
 echo "$server_ip" > /etc/s-box/server_ip.log
@@ -1892,7 +1903,7 @@ $(sbany1)
         "vmess-tls-argo临时-$hostname",
         "vmess-argo临时-$hostname"
             ],
-            "url": "http://www.gstatic.com/generate_204",
+            "url": "https://www.gstatic.com/generate_204",
             "interval": "10m",
             "tolerance": 50
         },
@@ -2114,7 +2125,7 @@ $(sbany1)
         "vmess-tls-argo临时-$hostname",
         "vmess-argo临时-$hostname"
             ],
-            "url": "http://www.gstatic.com/generate_204",
+            "url": "https://www.gstatic.com/generate_204",
             "interval": "10m",
             "tolerance": 50
         },
@@ -2304,7 +2315,7 @@ $(sbany1)
         "vmess-tls-argo固定-$hostname",
         "vmess-argo固定-$hostname"
             ],
-            "url": "http://www.gstatic.com/generate_204",
+            "url": "https://www.gstatic.com/generate_204",
             "interval": "10m",
             "tolerance": 50
         },
@@ -2434,7 +2445,7 @@ $(sbany1)
         "hy2-$hostname",
         "tuic5-$hostname"
             ],
-            "url": "http://www.gstatic.com/generate_204",
+            "url": "https://www.gstatic.com/generate_204",
             "interval": "10m",
             "tolerance": 50
         },
@@ -2522,17 +2533,15 @@ case $(uname -m) in
 aarch64) cpu=arm64;;
 x86_64) cpu=amd64;;
 esac
-tmp=$(download_to_temp https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-$cpu /etc/s-box/cloudflared) || { red "cloudflared下载失败"; return 1; }
-atomic_install "$tmp" /etc/s-box/cloudflared 755 || { rm -f "$tmp"; red "cloudflared安装失败"; return 1; }
-rm -f "$tmp"
+install_github_latest_asset cloudflare/cloudflared "cloudflared-linux-$cpu" /etc/s-box/cloudflared 755 || { red "cloudflared下载或校验失败"; return 1; }
 fi
 }
 
 cfargoym(){
 echo
-if [[ -f /etc/s-box/sbargotoken.log && -f /etc/s-box/sbargoym.log ]]; then
+if [[ -f /etc/s-box/.secrets/argo-token && -f /etc/s-box/sbargoym.log ]]; then
 green "当前Argo固定隧道域名：$(cat /etc/s-box/sbargoym.log 2>/dev/null)"
-green "当前Argo固定隧道Token：$(cat /etc/s-box/sbargotoken.log 2>/dev/null)"
+green "当前Argo固定隧道Token：$(sbyg_redact "$(cat /etc/s-box/.secrets/argo-token 2>/dev/null)")"
 fi
 echo
 green "请进入Cloudflare官网 --- Zero Trust --- 网络 --- 连接器，创建固定隧道"
@@ -2542,12 +2551,13 @@ yellow "0：返回上层"
 readp "请选择【0-2】：" menu
 if [ "$menu" = "1" ]; then
 cloudflaredargo
-readp "输入Argo固定隧道Token: " argotoken
+readsp "输入Argo固定隧道Token: " argotoken
 readp "输入Argo固定隧道域名: " argoym
 pid=$(ps -ef 2>/dev/null | awk '/[c]loudflared.*run/ {print $2}')
 [ -n "$pid" ] && kill -9 "$pid" >/dev/null 2>&1
 echo
 if [[ -n "${argotoken}" && -n "${argoym}" ]]; then
+sbyg_write_secret /etc/s-box/.secrets/argo-token "$argotoken" || return 1
 if pidof systemd >/dev/null 2>&1; then
 cat > /etc/systemd/system/argo.service <<EOF
 [Unit]
@@ -2557,7 +2567,7 @@ After=network.target
 Type=simple
 NoNewPrivileges=yes
 TimeoutStartSec=0
-ExecStart=/etc/s-box/cloudflared tunnel --no-autoupdate --edge-ip-version auto --protocol http2 run --token "${argotoken}"
+ExecStart=/etc/s-box/cloudflared tunnel --no-autoupdate --edge-ip-version auto --protocol http2 run --token-file /etc/s-box/.secrets/argo-token
 Restart=on-failure
 RestartSec=5s
 [Install]
@@ -2571,7 +2581,7 @@ cat > /etc/init.d/argo <<EOF
 #!/sbin/openrc-run
 description="argo service"
 command="/etc/s-box/cloudflared tunnel"
-command_args="--no-autoupdate --edge-ip-version auto --protocol http2 run --token ${argotoken}"
+command_args="--no-autoupdate --edge-ip-version auto --protocol http2 run --token-file /etc/s-box/.secrets/argo-token"
 pidfile="/run/argo.pid"
 command_background="yes"
 depend() {
@@ -2583,8 +2593,8 @@ rc-update add argo default >/dev/null 2>&1
 rc-service argo start >/dev/null 2>&1
 fi
 fi
-echo ${argoym} > /etc/s-box/sbargoym.log
-echo ${argotoken} > /etc/s-box/sbargotoken.log
+sbyg_write_secret /etc/s-box/sbargoym.log "$argoym" || return 1
+rm -f /etc/s-box/sbargotoken.log
 argo=$(cat /etc/s-box/sbargoym.log 2>/dev/null)
 sbshare > /dev/null 2>&1
 blue "Argo固定隧道设置完成，固定域名：$argo"
@@ -2836,8 +2846,8 @@ vm_port=$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[1].listen_port')
 hy2_port=$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[2].listen_port')
 tu5_port=$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[3].listen_port')
 an_port=$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[4].listen_port')
-hy2_ports=$(iptables -t nat -nL --line 2>/dev/null | grep -w "$hy2_port" | awk '{print $8}' | sed 's/dpts://; s/dpt://' | tr '\n' ',' | sed 's/,$//')
-tu5_ports=$(iptables -t nat -nL --line 2>/dev/null | grep -w "$tu5_port" | awk '{print $8}' | sed 's/dpts://; s/dpt://' | tr '\n' ',' | sed 's/,$//')
+hy2_ports=$(sbyg_fw_list_udp_sources "$hy2_port" | tr '\n' ',' | sed 's/,$//')
+tu5_ports=$(sbyg_fw_list_udp_sources "$tu5_port" | tr '\n' ',' | sed 's/,$//')
 [[ -n $hy2_ports ]] && hy2zfport="$hy2_ports" || hy2zfport="未添加"
 [[ -n $tu5_ports ]] && tu5zfport="$tu5_ports" || tu5zfport="未添加"
 }
@@ -2851,10 +2861,8 @@ if [[ $rangeport =~ ^([1-9][0-9]{3,4}:[1-9][0-9]{3,4})$ ]]; then
 b=${rangeport%%:*}
 c=${rangeport##*:}
 if [[ $b -ge 1000 && $b -le 65535 && $c -ge 1000 && $c -le 65535 && $b -lt $c ]]; then
-iptables -t nat -A PREROUTING -p udp --dport $rangeport -j DNAT --to-destination :$port
-ip6tables -t nat -A PREROUTING -p udp --dport $rangeport -j DNAT --to-destination :$port
-netfilter-persistent save >/dev/null 2>&1
-service iptables save >/dev/null 2>&1
+sbyg_fw_add_udp_dnat "$rangeport" "$port" || { red "Unable to add the owned forwarding rule"; return 1; }
+sbyg_fw_persist >/dev/null 2>&1 || true
 blue "已确认转发的端口范围：$rangeport"
 else
 red "输入的端口范围不在有效范围内" && fports
@@ -2867,10 +2875,8 @@ echo
 fport(){
 readp "\n请输入一个转发的端口 (1000-65535范围内)：" onlyport
 if [[ $onlyport -ge 1000 && $onlyport -le 65535 ]]; then
-iptables -t nat -A PREROUTING -p udp --dport $onlyport -j DNAT --to-destination :$port
-ip6tables -t nat -A PREROUTING -p udp --dport $onlyport -j DNAT --to-destination :$port
-netfilter-persistent save >/dev/null 2>&1
-service iptables save >/dev/null 2>&1
+sbyg_fw_add_udp_dnat "$onlyport" "$port" || { red "Unable to add the owned forwarding rule"; return 1; }
+sbyg_fw_persist >/dev/null 2>&1 || true
 blue "已确认转发的端口：$onlyport"
 else
 blue "输入的端口不在有效范围内" && fport
@@ -2883,22 +2889,18 @@ allports
 hy2_ports=$(echo "$hy2_ports" | sed 's/,/,/g')
 IFS=',' read -ra ports <<< "$hy2_ports"
 for port in "${ports[@]}"; do
-iptables -t nat -D PREROUTING -p udp --dport $port -j DNAT --to-destination :$hy2_port
-ip6tables -t nat -D PREROUTING -p udp --dport $port -j DNAT --to-destination :$hy2_port
+sbyg_fw_remove_udp_dnat "$port" "$hy2_port" || true
 done
-netfilter-persistent save >/dev/null 2>&1
-service iptables save >/dev/null 2>&1
+sbyg_fw_persist >/dev/null 2>&1 || true
 }
 tu5deports(){
 allports
 tu5_ports=$(echo "$tu5_ports" | sed 's/,/,/g')
 IFS=',' read -ra ports <<< "$tu5_ports"
 for port in "${ports[@]}"; do
-iptables -t nat -D PREROUTING -p udp --dport $port -j DNAT --to-destination :$tu5_port
-ip6tables -t nat -D PREROUTING -p udp --dport $port -j DNAT --to-destination :$tu5_port
+sbyg_fw_remove_udp_dnat "$port" "$tu5_port" || true
 done
-netfilter-persistent save >/dev/null 2>&1
-service iptables save >/dev/null 2>&1
+sbyg_fw_persist >/dev/null 2>&1 || true
 }
 
 allports
@@ -3113,12 +3115,15 @@ yellow "0：返回上层"
 readp "请选择【0-1】：" menu
 if [ "$menu" = "1" ]; then
 rm -rf /etc/s-box/sbtg.sh
-readp "输入Telegram机器人Token: " token
+readsp "输入Telegram机器人Token: " token
 telegram_token=$token
 readp "输入Telegram机器人用户ID: " userid
 telegram_id=$userid
+sbyg_write_secret /etc/s-box/.secrets/telegram-token "$telegram_token" || return 1
+sbyg_write_secret /etc/s-box/.secrets/telegram-id "$telegram_id" || return 1
 echo '#!/bin/bash
 export LANG=en_US.UTF-8
+telegram_token=$(cat /etc/s-box/.secrets/telegram-token)
 sbnh=$(/etc/s-box/sing-box version 2>/dev/null | awk '/version/{print $NF}' 2>/dev/null | cut -d '.' -f 1,2)
 total_lines=$(wc -l < /etc/s-box/clmi.yaml)
 half=$((total_lines / 2))
@@ -3167,7 +3172,7 @@ message_text_m10=$(echo "$m10")
 message_text_m11=$(echo "$m11")
 message_text_m12=$(echo "$m12")
 MODE=HTML
-URL="https://api.telegram.org/bottelegram_token/sendMessage"
+URL="https://api.telegram.org/bot${telegram_token}/sendMessage"
 res=$(timeout 20s curl -s -X POST $URL -d chat_id=telegram_id  -d parse_mode=${MODE} --data-urlencode "text=🚀【 Vless-reality-vision 分享链接 】：支持v2rayng、nekobox "$'"'"'\n\n'"'"'"${message_text_m1}")
 if [[ -f /etc/s-box/vm_ws.txt ]]; then
 res=$(timeout 20s curl -s -X POST $URL -d chat_id=telegram_id  -d parse_mode=${MODE} --data-urlencode "text=🚀【 Vmess-ws 分享链接 】：支持v2rayng、nekobox "$'"'"'\n\n'"'"'"${message_text_m2}")
@@ -3213,8 +3218,8 @@ else
 echo "TG推送失败，请检查TG机器人Token和ID";
 fi
 ' > /etc/s-box/sbtg.sh
-sed -i "s/telegram_token/$telegram_token/g" /etc/s-box/sbtg.sh
 sed -i "s/telegram_id/$telegram_id/g" /etc/s-box/sbtg.sh
+chmod 700 /etc/s-box/sbtg.sh
 green "设置完成！请确保TG机器人已处于激活状态！"
 tgnotice
 else
@@ -3262,17 +3267,22 @@ fi
 }
 
 ipsub(){
+declare -F sbyg_subscription_token >/dev/null 2>&1 || { red "Subscription security module is unavailable"; return 1; }
 subtokenipsub(){
 echo
-readp "输入订阅链接路径密码（回车表示使用当前UUID）：" menu
+readp "输入独立的订阅路径口令（回车表示安全随机生成）：" menu
 if [ -z "$menu" ]; then
-subtoken="$(sed 's://.*::g' /etc/s-box/sb.json | jq -r '.inbounds[0].users[0].uuid')"
+sbyg_subscription_token > /etc/s-box/.subscription-token.new || return 1
+subtoken=$(cat /etc/s-box/.subscription-token.new)
+rm -f /etc/s-box/.subscription-token.new
 else
 subtoken="$menu"
 fi
-rm -rf /root/websbox/"$(cat /etc/s-box/subtoken.log 2>/dev/null)"
-echo $subtoken > /etc/s-box/subtoken.log
-green "订阅链接路径密码：$(cat /etc/s-box/subtoken.log 2>/dev/null)"
+sbyg_subscription_validate_token "$subtoken" || { red "订阅口令只能包含字母、数字、下划线和短横线，长度为24-128"; return 1; }
+old_subtoken=$(cat /etc/s-box/subtoken.log 2>/dev/null)
+[[ -z "$old_subtoken" ]] || sbyg_subscription_remove_token_root /root/websbox "$old_subtoken" || true
+sbyg_write_secret /etc/s-box/subtoken.log "$subtoken" || return 1
+green "订阅链接路径密码：$(sbyg_redact "$subtoken")"
 }
 subportipsub(){
 echo
@@ -3282,7 +3292,8 @@ subport=$(shuf -i 10000-65535 -n 1)
 else
 subport="$menu"
 fi
-echo $subport > /etc/s-box/subport.log
+sbyg_subscription_validate_port "$subport" || { red "订阅端口必须在1024-65535之间"; return 1; }
+sbyg_write_secret /etc/s-box/subport.log "$subport" || return 1
 green "订阅链接端口：$(cat /etc/s-box/subport.log 2>/dev/null)"
 }
 echo
@@ -3313,28 +3324,27 @@ fi
 echo
 green "请稍后…………"
 kill -15 $(pgrep -f 'websbox' 2>/dev/null) >/dev/null 2>&1
-mkdir -p /root/websbox/"$(cat /etc/s-box/subtoken.log 2>/dev/null)"
-ln -sf /etc/s-box/clmi.yaml /root/websbox/"$(cat /etc/s-box/subtoken.log 2>/dev/null)"/clmi.yaml
-ln -sf /etc/s-box/sbox.json /root/websbox/"$(cat /etc/s-box/subtoken.log 2>/dev/null)"/sbox.json
-ln -sf /etc/s-box/jhsub.txt /root/websbox/"$(cat /etc/s-box/subtoken.log 2>/dev/null)"/jhsub.txt
-if command -v apk >/dev/null 2>&1; then
-busybox-extras httpd -f -p "$(cat /etc/s-box/subport.log 2>/dev/null)" -h /root/websbox > /dev/null 2>&1 &
-else
-busybox httpd -f -p "$(cat /etc/s-box/subport.log 2>/dev/null)" -h /root/websbox > /dev/null 2>&1 &
-fi
+subtoken=$(cat /etc/s-box/subtoken.log 2>/dev/null)
+subport=$(cat /etc/s-box/subport.log 2>/dev/null)
+sbyg_subscription_prepare_root /root/websbox "$subtoken" || return 1
+ln -sf /etc/s-box/clmi.yaml "/root/websbox/$subtoken/clmi.yaml"
+ln -sf /etc/s-box/sbox.json "/root/websbox/$subtoken/sbox.json"
+ln -sf /etc/s-box/jhsub.txt "/root/websbox/$subtoken/jhsub.txt"
+sub_pid=$(sbyg_subscription_start_loopback /root/websbox "$subport" /etc/s-box/subscription-httpd.log) || return 1
+sbyg_write_secret /etc/s-box/subscription-httpd.pid "$sub_pid" || true
 sleep 5
 if command -v apk >/dev/null 2>&1; then
 cat > /etc/local.d/alpinesub.start <<'EOF'
 #!/bin/bash
 sleep 10
-busybox-extras httpd -f -p $(cat /etc/s-box/subport.log 2>/dev/null) -h /root/websbox > /dev/null 2>&1 &
+busybox-extras httpd -f -p 127.0.0.1:$(cat /etc/s-box/subport.log 2>/dev/null) -h /root/websbox > /dev/null 2>&1 &
 EOF
 chmod +x /etc/local.d/alpinesub.start
 rc-update add local default >/dev/null 2>&1
 else
 crontab -l 2>/dev/null > /tmp/crontab.tmp
 sed -i '/websbox/d' /tmp/crontab.tmp
-echo '@reboot sleep 10 && /bin/bash -c "busybox httpd -f -p $(cat /etc/s-box/subport.log 2>/dev/null) -h /root/websbox > /dev/null 2>&1 &"' >> /tmp/crontab.tmp
+echo '@reboot sleep 10 && /bin/bash -c "busybox httpd -f -p 127.0.0.1:$(cat /etc/s-box/subport.log 2>/dev/null) -h /root/websbox > /dev/null 2>&1 &"' >> /tmp/crontab.tmp
 crontab /tmp/crontab.tmp >/dev/null 2>&1
 rm /tmp/crontab.tmp
 fi
@@ -3382,6 +3392,23 @@ changeserv
 fi
 }
 
+gitlab_push_secure(){
+local refspec=${1:-main} askpass status=0
+[ -f /etc/s-box/.secrets/gitlab-token ] || return 1
+askpass=$(mktemp /etc/s-box/.secrets/git-askpass.XXXXXX) || return 1
+cat > "$askpass" <<'EOF'
+#!/bin/sh
+case "$1" in
+  *Username*) printf '%s\n' oauth2 ;;
+  *) cat "$SBYG_GITLAB_TOKEN_FILE" ;;
+esac
+EOF
+chmod 700 "$askpass" || { rm -f "$askpass"; return 1; }
+SBYG_GITLAB_TOKEN_FILE=/etc/s-box/.secrets/gitlab-token GIT_ASKPASS="$askpass" GIT_TERMINAL_PROMPT=0 git push -f origin "$refspec" || status=$?
+rm -f "$askpass"
+return "$status"
+}
+
 gitlabsub(){
 echo
 green "请确保Gitlab官网上已建立项目，已开启推送功能，已获取访问令牌"
@@ -3391,7 +3418,7 @@ readp "请选择【0-1】：" menu
 if [ "$menu" = "1" ]; then
 cd /etc/s-box
 readp "输入登录邮箱: " email
-readp "输入访问令牌: " token
+readsp "输入访问令牌: " token
 readp "输入用户名: " userid
 readp "输入项目名: " project
 echo
@@ -3408,31 +3435,24 @@ gitlab_ml=":${gitlabml}"
 git_sk="${gitlabml}"
 echo "${gitlab_ml}" > /etc/s-box/gitlab_ml_ml
 fi
-echo "$token" > /etc/s-box/gitlabtoken.txt
+sbyg_write_secret /etc/s-box/.secrets/gitlab-token "$token" || return 1
+rm -f /etc/s-box/gitlabtoken.txt /etc/s-box/gitpush.sh
 rm -rf /etc/s-box/.git
 git init >/dev/null 2>&1
 git add sbox.json clmi.yaml jhsub.txt >/dev/null 2>&1
-git config --global user.email "${email}" >/dev/null 2>&1
-git config --global user.name "${userid}" >/dev/null 2>&1
+git config user.email "${email}" >/dev/null 2>&1
+git config user.name "${userid}" >/dev/null 2>&1
 git commit -m "commit_add_$(date +"%F %T")" >/dev/null 2>&1
 branches=$(git branch)
 if [[ $branches == *master* ]]; then
 git branch -m master main >/dev/null 2>&1
 fi
-git remote add origin https://${token}@gitlab.com/${userid}/${project}.git >/dev/null 2>&1
+git remote add origin https://gitlab.com/${userid}/${project}.git >/dev/null 2>&1
 if [[ $(ls -a | grep '^\.git$') ]]; then
-cat > /etc/s-box/gitpush.sh <<EOF
-#!/usr/bin/expect
-spawn bash -c "git push -f origin main${gitlab_ml}"
-expect "Password for 'https://$(cat /etc/s-box/gitlabtoken.txt 2>/dev/null)@gitlab.com':"
-send "$(cat /etc/s-box/gitlabtoken.txt 2>/dev/null)\r"
-interact
-EOF
-chmod +x gitpush.sh
-./gitpush.sh "git push -f origin main${gitlab_ml}" cat /etc/s-box/gitlabtoken.txt >/dev/null 2>&1
-echo "https://gitlab.com/api/v4/projects/${userid}%2F${project}/repository/files/sbox.json/raw?ref=${git_sk}&private_token=${token}" > /etc/s-box/sing_box_gitlab.txt
-echo "https://gitlab.com/api/v4/projects/${userid}%2F${project}/repository/files/clmi.yaml/raw?ref=${git_sk}&private_token=${token}" > /etc/s-box/clash_meta_gitlab.txt
-echo "https://gitlab.com/api/v4/projects/${userid}%2F${project}/repository/files/jhsub.txt/raw?ref=${git_sk}&private_token=${token}" > /etc/s-box/jh_sub_gitlab.txt
+gitlab_push_secure "main${gitlab_ml}" >/dev/null 2>&1 || { red "GitLab push failed"; return 1; }
+sbyg_write_secret /etc/s-box/sing_box_gitlab.txt "https://gitlab.com/api/v4/projects/${userid}%2F${project}/repository/files/sbox.json/raw?ref=${git_sk}&private_token=${token}"
+sbyg_write_secret /etc/s-box/clash_meta_gitlab.txt "https://gitlab.com/api/v4/projects/${userid}%2F${project}/repository/files/clmi.yaml/raw?ref=${git_sk}&private_token=${token}"
+sbyg_write_secret /etc/s-box/jh_sub_gitlab.txt "https://gitlab.com/api/v4/projects/${userid}%2F${project}/repository/files/jhsub.txt/raw?ref=${git_sk}&private_token=${token}"
 clsbshow
 else
 yellow "设置Gitlab订阅链接失败，请反馈"
@@ -3453,8 +3473,7 @@ git rm --cached sbox.json clmi.yaml jhsub.txt >/dev/null 2>&1
 git commit -m "commit_rm_$(date +"%F %T")" >/dev/null 2>&1
 git add sbox.json clmi.yaml jhsub.txt >/dev/null 2>&1
 git commit -m "commit_add_$(date +"%F %T")" >/dev/null 2>&1
-chmod +x gitpush.sh
-./gitpush.sh "git push -f origin main${gitlab_ml}" cat /etc/s-box/gitlabtoken.txt >/dev/null 2>&1
+gitlab_push_secure "main${gitlab_ml}" >/dev/null 2>&1 || { red "GitLab push failed"; return 1; }
 clsbshow
 else
 yellow "未设置Gitlab订阅链接"
@@ -3465,25 +3484,23 @@ cd
 clsbshow(){
 green "当前Sing-box节点已更新并推送"
 green "Sing-box订阅链接如下："
-blue "$(cat /etc/s-box/sing_box_gitlab.txt 2>/dev/null)"
+blue "$(sbyg_redact_url "$(cat /etc/s-box/sing_box_gitlab.txt 2>/dev/null)")"
 echo
-green "Sing-box订阅链接二维码如下："
-qrencode -o - -t ANSIUTF8 "$(cat /etc/s-box/sing_box_gitlab.txt 2>/dev/null)"
+yellow "完整私有订阅地址已保存在权限为600的本机文件中，不在终端显示二维码"
 echo
 echo "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
 echo
 green "当前Mihomo节点配置已更新并推送"
 green "Mihomo订阅链接如下："
-blue "$(cat /etc/s-box/clash_meta_gitlab.txt 2>/dev/null)"
+blue "$(sbyg_redact_url "$(cat /etc/s-box/clash_meta_gitlab.txt 2>/dev/null)")"
 echo
-green "Mihomo订阅链接二维码如下："
-qrencode -o - -t ANSIUTF8 "$(cat /etc/s-box/clash_meta_gitlab.txt 2>/dev/null)"
+yellow "完整私有订阅地址已保存在权限为600的本机文件中，不在终端显示二维码"
 echo
 echo "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
 echo
 green "当前聚合节点配置已更新并推送"
 green "订阅链接如下："
-blue "$(cat /etc/s-box/jh_sub_gitlab.txt 2>/dev/null)"
+blue "$(sbyg_redact_url "$(cat /etc/s-box/jh_sub_gitlab.txt 2>/dev/null)")"
 echo
 yellow "可以在网页上输入订阅链接查看配置内容，如果无配置内容，请自检Gitlab相关设置并重置"
 echo
@@ -3592,8 +3609,8 @@ fi
 sbymfl(){
 sbport=$(cat /etc/s-box/sbwpph.log 2>/dev/null | awk '{print $3}' | awk -F":" '{print $NF}') 
 sbport=${sbport:-'40000'}
-resv1=$(curl -sm3 --socks5 localhost:$sbport icanhazip.com)
-resv2=$(curl -sm3 -x socks5h://localhost:$sbport icanhazip.com)
+resv1=$(curl -fsSm3 --socks5 localhost:$sbport https://icanhazip.com)
+resv2=$(curl -fsSm3 -x socks5h://localhost:$sbport https://icanhazip.com)
 if [[ -z $resv1 && -z $resv2 ]]; then
 warp_s4_ip='Socks5-IPV4未启动，黑名单模式'
 warp_s6_ip='Socks5-IPV6未启动，黑名单模式'
@@ -3965,20 +3982,37 @@ done
 $restored
 }
 
+restart_service_checked(){
+if command -v apk >/dev/null 2>&1; then
+rc-service sing-box restart || return 1
+rc-service sing-box status >/dev/null 2>&1 || return 1
+else
+systemctl enable sing-box >/dev/null 2>&1 || return 1
+systemctl restart sing-box || return 1
+systemctl is-active --quiet sing-box || return 1
+fi
+}
+
+rollback_service_config(){
+restore_config || return 1
+checksb || return 1
+restart_service_checked
+}
+
 restartsb(){
+if declare -F sbyg_refresh_active_config >/dev/null 2>&1 && ! sbyg_refresh_active_config; then
+restore_config
+return 1
+fi
 if ! checksb; then
 restore_config && red "已恢复最后一次可用配置"
 return 1
 fi
-if command -v apk >/dev/null 2>&1; then
-rc-service sing-box restart
-rc-service sing-box status >/dev/null 2>&1
-else
-systemctl enable sing-box
-systemctl restart sing-box
-systemctl is-active --quiet sing-box
+if ! restart_service_checked; then
+rollback_service_config >/dev/null 2>&1
+return 1
 fi
-snapshot_config
+snapshot_config || return 1
 }
 
 stclre(){
@@ -4005,18 +4039,24 @@ fi
 
 cronsb(){
 uncronsb
-crontab -l 2>/dev/null > /tmp/crontab.tmp
-if command -v apk >/dev/null 2>&1; then
-echo "0 1 * * * rc-service sing-box restart" >> /tmp/crontab.tmp
-else
-echo "0 1 * * * systemctl try-restart sing-box" >> /tmp/crontab.tmp
+if ! command -v apk >/dev/null 2>&1; then
+sbyg_service_render_health_timer /etc/systemd/system/sing-box-yg-health.service /etc/systemd/system/sing-box-yg-health.timer /usr/local/lib/sing-box-yg/sb-doctor.sh || return 1
+systemctl daemon-reload
+systemctl enable --now sing-box-yg-health.timer
+return
 fi
+crontab -l 2>/dev/null > /tmp/crontab.tmp
+echo "*/15 * * * * /usr/local/lib/sing-box-yg/sb-doctor.sh --repair >/dev/null 2>&1" >> /tmp/crontab.tmp
 crontab /tmp/crontab.tmp >/dev/null 2>&1
 rm /tmp/crontab.tmp
 }
 uncronsb(){
+if command -v systemctl >/dev/null 2>&1; then
+systemctl disable --now sing-box-yg-health.timer >/dev/null 2>&1 || true
+fi
 crontab -l 2>/dev/null > /tmp/crontab.tmp
 sed -i '/sing-box/d' /tmp/crontab.tmp
+sed -i '/sb-doctor/d' /tmp/crontab.tmp
 sed -i '/sbwpph/d' /tmp/crontab.tmp
 sed -i '/url http/d' /tmp/crontab.tmp
 sed -i '/websbox/d' /tmp/crontab.tmp
@@ -4025,22 +4065,15 @@ rm /tmp/crontab.tmp
 }
 
 lnsb(){
-local tmp
-tmp=$(download_to_temp https://raw.githubusercontent.com/yonggekkk/sing-box-yg/main/sb.sh /usr/bin/sb) || { red "脚本下载失败，已保留当前版本"; return 1; }
-if ! bash -n "$tmp"; then
-rm -f "$tmp"
-red "脚本校验失败，已保留当前版本"
-return 1
-fi
-atomic_install "$tmp" /usr/bin/sb 755 || { rm -f "$tmp"; red "脚本更新失败，已保留当前版本"; return 1; }
-rm -f "$tmp"
+local installer=/usr/local/lib/sing-box-yg/install.sh
+[[ -x "$installer" ]] || { red "未找到校验型安装器，请先迁移到稳定版安装方式"; return 1; }
+"$installer" --channel stable --upgrade
 }
 
 upsbyg(){
 if [[ ! -f '/usr/bin/sb' ]]; then
 red "未正常安装Sing-box-yg" && exit
 fi
-lnsb
 if ! lnsb; then
 red "Sing-box-yg安装脚本升级失败，已保留当前版本" && return 1
 fi
@@ -4085,12 +4118,30 @@ sb
 fi
 if [[ -n $upcore ]]; then
 green "开始下载并更新Sing-box内核……请稍等"
+transaction_state=/etc/s-box/.transaction
+transaction_ready=false
+if declare -F sbyg_transaction_begin >/dev/null 2>&1; then
+sbyg_transaction_begin "$transaction_state" /etc/s-box/sb.json /etc/s-box/sing-box || { red "Unable to create a safe update snapshot"; return 1; }
+transaction_ready=true
+fi
 if install_sing_box_core "$upcore"; then
 sbnh=$(/etc/s-box/sing-box version 2>/dev/null | awk '/version/{print $NF}' 2>/dev/null | cut -d '.' -f 1,2)
 [[ "$sbnh" == "1.10" ]] && num=10 || num=11
-rm -rf /etc/s-box/sb.json
-cp /etc/s-box/sb${num}.json /etc/s-box/sb.json
-restartsb && sbshare > /dev/null 2>&1
+if ! sbyg_config_prepare "/etc/s-box/sb${num}.json" /etc/s-box/sb.json "$upcore"; then
+$transaction_ready && sbyg_transaction_rollback "$transaction_state" /etc/s-box/sb.json /etc/s-box/sing-box >/dev/null 2>&1
+red "Unable to install the candidate configuration"
+return 1
+fi
+if $transaction_ready; then
+if ! sbyg_transaction_apply "$transaction_state" /etc/s-box/sb.json /etc/s-box/sing-box; then
+red "Core update failed health checks and was rolled back"
+return 1
+fi
+snapshot_config || return 1
+else
+restartsb || return 1
+fi
+sbshare > /dev/null 2>&1
 blue "成功升级/切换 Sing-box 内核版本：$(/etc/s-box/sing-box version | awk '/version/{print $NF}')" && sleep 3 && sb
 else
 red "核心下载、校验或安装失败，已保留当前版本" && upsbcroe
@@ -4106,25 +4157,41 @@ for svc in sing-box argo; do
 rc-service "$svc" stop >/dev/null 2>&1
 rc-update del "$svc" default >/dev/null 2>&1
 done
-rm -rf /etc/init.d/{sing-box,argo}
+rm -f /etc/init.d/sing-box /etc/init.d/argo
 else
 for svc in sing-box argo; do
 systemctl stop "$svc" >/dev/null 2>&1
 systemctl disable "$svc" >/dev/null 2>&1
 done
-rm -rf /etc/systemd/system/{sing-box.service,argo.service}
+rm -f /etc/systemd/system/sing-box.service /etc/systemd/system/argo.service \
+  /etc/systemd/system/sing-box-yg-health.service /etc/systemd/system/sing-box-yg-health.timer
 fi
-ps -ef | grep "[l]ocalhost:$(sed 's://.*::g' /etc/s-box/sb.json 2>/dev/null | jq -r '.inbounds[1].listen_port')" | awk '{print $2}' | xargs kill 2>/dev/null
-ps -ef | grep '[s]bwpph' | awk '{print $2}' | xargs kill 2>/dev/null
-kill -15 $(pgrep -f 'websbox' 2>/dev/null) >/dev/null 2>&1
-rm -rf /etc/s-box sbyg_update /usr/bin/sb /root/geoip.db /root/geosite.db /root/warpapi /root/warpip /root/websbox
-rm -f /etc/local.d/alpineargo.start /etc/local.d/alpinesub.start /etc/local.d/alpinews5.start
+if [[ -f /etc/s-box/subscription-httpd.pid ]]; then
+subscription_pid=$(cat /etc/s-box/subscription-httpd.pid 2>/dev/null)
+case $subscription_pid in
+''|*[!0-9]*) ;;
+*)
+subscription_command=$(ps -p "$subscription_pid" -o command= 2>/dev/null)
+[[ "$subscription_command" == *"httpd"*"/root/websbox"* ]] && kill -TERM "$subscription_pid" 2>/dev/null || true
+;;
+esac
+fi
+recovery_root="/var/backups/sing-box-yg/$(date +%Y%m%d-%H%M%S)-$$"
+install -d -m 700 "$recovery_root" || { red "Unable to create uninstall recovery directory"; return 1; }
+if [[ -e /etc/s-box ]]; then
+mv /etc/s-box "$recovery_root/etc-s-box" || return 1
+fi
+for recovery_asset in /root/geoip.db /root/geosite.db /root/warpapi /root/warpip /root/websbox; do
+[[ -e "$recovery_asset" ]] || continue
+mv "$recovery_asset" "$recovery_root/${recovery_asset##*/}" || return 1
+done
+rm -f /usr/bin/sb /etc/local.d/alpineargo.start /etc/local.d/alpinesub.start /etc/local.d/alpinews5.start
 uncronsb
-iptables -t nat -F PREROUTING >/dev/null 2>&1
-netfilter-persistent save >/dev/null 2>&1
-service iptables save >/dev/null 2>&1
+sbyg_fw_remove_all >/dev/null 2>&1 || true
+sbyg_fw_persist >/dev/null 2>&1 || true
 green "Sing-box卸载完成！"
-blue "欢迎继续使用Sing-box-yg脚本：bash <(curl -Ls https://raw.githubusercontent.com/yonggekkk/sing-box-yg/main/sb.sh)"
+blue "原配置和项目数据已移至可恢复目录：$recovery_root"
+blue "欢迎继续使用Sing-box-yg脚本：https://github.com/reqingonline/sing-box-yg/releases/latest"
 echo
 }
 
@@ -4212,19 +4279,19 @@ fi
 }
 
 acme(){
-#bash <(curl -Ls https://gitlab.com/rwkgyg/acme-script/raw/main/acme.sh)
-bash <(curl -Ls https://raw.githubusercontent.com/yonggekkk/acme-yg/main/acme.sh)
+red "ACME 外部脚本入口已停用；请使用系统软件源中的 certbot/acme.sh，并手工导入证书"
+return 1
 }
 cfwarp(){
-#bash <(curl -Ls https://gitlab.com/rwkgyg/CFwarp/raw/main/CFwarp.sh)
-bash <(curl -Ls https://raw.githubusercontent.com/yonggekkk/warp-yg/main/CFwarp.sh)
+red "外部 WARP 管理脚本入口已停用；sing-box 内置 WireGuard/WARP 出站不受影响"
+return 1
 }
 bbr(){
 if [[ $vi =~ lxc|openvz ]]; then
 yellow "当前VPS的架构为 $vi，不支持开启原版BBR加速" && sleep 2 && exit 
 else
-green "点击任意键，即可开启BBR加速，ctrl+c退出"
-bash <(curl -Ls https://raw.githubusercontent.com/teddysun/across/master/bbr.sh)
+red "外部 BBR 脚本入口已停用；请通过发行版内核和 /etc/sysctl.d 单独启用 BBR"
+return 1
 fi
 }
 
@@ -4266,11 +4333,11 @@ if [ -s /etc/s-box/subport.log ]; then
 showsubport=$(cat /etc/s-box/subport.log)
 if ps -ef 2>/dev/null | grep "$showsubport" | grep -v grep >/dev/null; then
 showsubtoken=$(cat /etc/s-box/subtoken.log 2>/dev/null)
-subip=$(cat /etc/s-box/server_ip.log 2>/dev/null)
-suburl="$subip:$showsubport/$showsubtoken"
-echo "Clash/Mihomo本地IP订阅地址：http://$suburl/clmi.yaml"
-echo "Sing-box本地IP订阅地址：http://$suburl/sbox.json"
-echo "聚合协议本地IP订阅地址：http://$suburl/jhsub.txt"
+suburl="127.0.0.1:$showsubport/$(sbyg_redact "$showsubtoken")"
+echo "Clash/Mihomo本机回环订阅：http://$suburl/clmi.yaml"
+echo "Sing-box本机回环订阅：http://$suburl/sbox.json"
+echo "聚合协议本机回环订阅：http://$suburl/jhsub.txt"
+yellow "公网订阅必须通过已配置的 HTTPS 隧道或反向代理提供"
 fi
 fi
 if [ "$argoym" = "已开启" ]; then
@@ -4345,6 +4412,8 @@ fi
 }
 
 inssbwpph(){
+red "WARP-plus 二进制来源无法独立验证，此功能已停用；现有 sing-box WireGuard/WARP 功能不受影响"
+return 1
 sbactive
 ins(){
 if [ ! -e /etc/s-box/sbwpph ]; then
@@ -4352,9 +4421,8 @@ case $(uname -m) in
 aarch64) cpu=arm64;;
 x86_64) cpu=amd64;;
 esac
-tmp=$(download_to_temp https://raw.githubusercontent.com/yonggekkk/sing-box-yg/main/sbwpph_$cpu /etc/s-box/sbwpph) || { red "WARP-plus下载失败"; return 1; }
-atomic_install "$tmp" /etc/s-box/sbwpph 755 || { rm -f "$tmp"; red "WARP-plus安装失败"; return 1; }
-rm -f "$tmp"
+red "WARP-plus 安装已停用"
+return 1
 fi
 ps -ef | grep '[s]bwpph' | awk '{print $2}' | xargs kill 2>/dev/null
 v4v6
@@ -4421,8 +4489,8 @@ if [ "$menu" = "1" ]; then
 ins
 nohup /etc/s-box/sbwpph -b 127.0.0.1:$port -$sw46 --endpoint 162.159.192.1:2408 >/dev/null 2>&1 &
 green "申请IP中……请稍等……" && sleep 20
-resv1=$(curl -sm3 --socks5 localhost:$port icanhazip.com)
-resv2=$(curl -sm3 -x socks5h://localhost:$port icanhazip.com)
+resv1=$(curl -fsSm3 --socks5 localhost:$port https://icanhazip.com)
+resv2=$(curl -fsSm3 -x socks5h://localhost:$port https://icanhazip.com)
 if [[ -z $resv1 && -z $resv2 ]]; then
 red "WARP-plus-Socks5的IP获取失败" && unins && exit
 else
@@ -4469,8 +4537,8 @@ echo '
 readp "可选择国家地区（输入末尾两个大写字母，如美国，则输入US）：" guojia
 nohup /etc/s-box/sbwpph -b 127.0.0.1:$port --cfon --country $guojia -$sw46 --endpoint 162.159.192.1:2408 >/dev/null 2>&1 &
 green "申请IP中……请稍等……" && sleep 20
-resv1=$(curl -sm3 --socks5 localhost:$port icanhazip.com)
-resv2=$(curl -sm3 -x socks5h://localhost:$port icanhazip.com)
+resv1=$(curl -fsSm3 --socks5 localhost:$port https://icanhazip.com)
+resv2=$(curl -fsSm3 -x socks5h://localhost:$port https://icanhazip.com)
 if [[ -z $resv1 && -z $resv2 ]]; then
 red "WARP-plus-Socks5的IP获取失败，尝试换个国家地区吧" && unins && exit
 else
@@ -4491,7 +4559,7 @@ green "关注甬哥YouTube频道：https://youtube.com/@ygkkk?sub_confirmation=1
 echo
 blue "sing-box-yg脚本视频教程：https://www.youtube.com/playlist?list=PLMgly2AulGG_Affv6skQXWnVqw7XWiPwJ"
 echo
-blue "sing-box-yg脚本博客说明：http://ygkkk.blogspot.com/2023/10/sing-box-yg.html"
+blue "sing-box-yg脚本博客说明：https://ygkkk.blogspot.com/2023/10/sing-box-yg.html"
 echo
 blue "sing-box-yg脚本项目地址：https://github.com/yonggekkk/sing-box-yg"
 echo
@@ -4531,7 +4599,7 @@ green "10. 查看 Sing-box 运行日志"
 green "11. 一键原版BBR+FQ加速"
 green "12. 管理 Acme 申请域名IP证书"
 green "13. 管理 Warp 查看Netflix/ChatGPT解锁情况"
-green "14. 添加 WARP-plus-Socks5 代理模式 【本地Warp/多地区Psiphon-VPN】"
+yellow "14. WARP-plus-Socks5 已停用（原二进制缺少可验证来源）"
 green "15. 更换IP刷新本地IP、调整IPV4/IPV6配置输出"
 white "----------------------------------------------------------------------------------"
 green "16. Sing-box-yg脚本使用说明书"
@@ -4539,14 +4607,15 @@ white "-------------------------------------------------------------------------
 green " 0. 退出脚本"
 red "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
 insV=$(cat /etc/s-box/v 2>/dev/null)
-latestV=$(curl -sL https://raw.githubusercontent.com/yonggekkk/sing-box-yg/main/version | awk -F "更新内容" '{print $1}' | head -n 1)
+latest_content=$(curl --fail --silent --show-error --location --proto '=https' "$(sbyg_project_file_url version)" 2>/dev/null || true)
+latestV=$(printf '%s\n' "$latest_content" | awk -F "更新内容" '{print $1}' | head -n 1)
 if [ -f /etc/s-box/v ]; then
 if [ "$insV" = "$latestV" ]; then
 echo -e "当前 Sing-box-yg 脚本最新版：${bblue}${insV}${plain} (已安装)"
 else
 echo -e "当前 Sing-box-yg 脚本版本号：${bblue}${insV}${plain}"
 echo -e "检测到最新 Sing-box-yg 脚本版本号：${yellow}${latestV}${plain} (可选择7进行更新)"
-echo -e "${yellow}$(curl -sL https://raw.githubusercontent.com/yonggekkk/sing-box-yg/main/version)${plain}"
+echo -e "${yellow}${latest_content}${plain}"
 fi
 else
 echo -e "当前 Sing-box-yg 脚本版本号：${bblue}${latestV}${plain}"

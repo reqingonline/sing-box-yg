@@ -1,0 +1,102 @@
+name: Verified release
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+    paths:
+      - RELEASE_VERSION
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Optional vX.Y.Z tag; defaults to RELEASE_VERSION
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout release source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Resolve and validate release tag
+        id: release
+        env:
+          MANUAL_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          declared_tag=$(tr -d '\r\n[:space:]' < RELEASE_VERSION)
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            release_tag=$GITHUB_REF_NAME
+          elif [ -n "$MANUAL_TAG" ]; then
+            release_tag=$MANUAL_TAG
+          else
+            release_tag=$declared_tag
+          fi
+          [[ "$release_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          test "$release_tag" = "$declared_tag"
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main
+          else
+            test "$GITHUB_REF" = refs/heads/main
+          fi
+          printf 'tag=%s\n' "$release_tag" >> "$GITHUB_OUTPUT"
+      - name: Install declared release tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq shellcheck
+      - name: Run security and regression preflight
+        run: bash scripts/release-checks.sh
+      - name: Create verified annotated tag when releasing from main
+        if: github.ref_type != 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          existing_ref=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" --jq '.object.sha' 2>/dev/null || true)
+          if [ -n "$existing_ref" ]; then
+            existing_commit=$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$existing_ref" --jq '.object.sha' 2>/dev/null || printf '%s' "$existing_ref")
+            test "$existing_commit" = "$GITHUB_SHA"
+          else
+            tag_object=$(gh api --method POST "repos/$GITHUB_REPOSITORY/git/tags" \
+              -f tag="$RELEASE_TAG" -f message="$RELEASE_TAG" \
+              -f object="$GITHUB_SHA" -f type=commit --jq '.sha')
+            gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
+              -f ref="refs/tags/$RELEASE_TAG" -f sha="$tag_object" >/dev/null
+          fi
+      - name: Build deterministic source archive
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          archive="sing-box-yg-${RELEASE_TAG}.tar.gz"
+          git archive --format=tar --prefix="sing-box-yg-${RELEASE_TAG}/" "$GITHUB_SHA" | gzip -n > "$archive"
+          sha256sum "$archive" > SHA256SUMS
+          mkdir verify
+          cp "$archive" SHA256SUMS verify/
+          (cd verify && sha256sum -c SHA256SUMS && tar -tzf "$archive" >/dev/null)
+      - name: Publish verified assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          archive="sing-box-yg-${RELEASE_TAG}.tar.gz"
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "$archive" SHA256SUMS --clobber
+          else
+            gh release create "$RELEASE_TAG" "$archive" SHA256SUMS \
+              --verify-tag --generate-notes --title "$RELEASE_TAG"
+          fi
