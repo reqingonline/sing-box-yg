@@ -68,6 +68,8 @@ test "$(cat "$repo_root/RELEASE_VERSION")" = 'v1.0.0'
 grep -F 'branches:' "$repo_root/.github/workflows/release.yml"
 grep -F 'RELEASE_VERSION' "$repo_root/.github/workflows/release.yml"
 grep -F '.github/workflows/release.yml' "$repo_root/.github/workflows/release.yml"
+grep -F 'group: verified-release-${{ github.repository }}' \
+  "$repo_root/.github/workflows/release.yml"
 grep -F 'git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main' \
   "$repo_root/.github/workflows/release.yml"
 grep -F 'bash scripts/publish-release.sh "$RELEASE_TAG" "$GITHUB_SHA"' \
