@@ -77,17 +77,4 @@ jobs:
         run: |
           set -euo pipefail
           archive="sing-box-yg-${RELEASE_TAG}.tar.gz"
-          existing_ref=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" --jq '.object.sha' 2>/dev/null || true)
-          if [ -n "$existing_ref" ]; then
-            existing_commit=$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$existing_ref" --jq '.object.sha' 2>/dev/null || printf '%s' "$existing_ref")
-            test "$existing_commit" = "$GITHUB_SHA"
-          fi
-          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release upload "$RELEASE_TAG" "$archive" SHA256SUMS --clobber
-          elif [ -n "$existing_ref" ]; then
-            gh release create "$RELEASE_TAG" "$archive" SHA256SUMS \
-              --verify-tag --generate-notes --title "$RELEASE_TAG"
-          else
-            gh release create "$RELEASE_TAG" "$archive" SHA256SUMS \
-              --target "$GITHUB_SHA" --generate-notes --title "$RELEASE_TAG"
-          fi
+          bash scripts/publish-release.sh "$RELEASE_TAG" "$GITHUB_SHA" "$archive" SHA256SUMS
