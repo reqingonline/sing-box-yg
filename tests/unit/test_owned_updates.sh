@@ -75,6 +75,8 @@ grep -F 'bash scripts/publish-release.sh "$RELEASE_TAG" "$GITHUB_SHA"' \
 grep -F 'Authorization: Bearer $GH_TOKEN' "$repo_root/scripts/publish-release.sh"
 grep -F 'draft:true' "$repo_root/scripts/publish-release.sh"
 grep -F "printf '{\"draft\":false}" "$repo_root/scripts/publish-release.sh"
+grep -F 'target_commitish:$sha' "$repo_root/scripts/publish-release.sh"
+grep -F 'existing_commit=$(resolve_tag_commit)' "$repo_root/scripts/publish-release.sh"
 if grep -F 'gh api --method POST "repos/$GITHUB_REPOSITORY/git/tags"' \
   "$repo_root/.github/workflows/release.yml"; then
   echo 'release workflow uses the failed standalone annotated-tag API path' >&2
