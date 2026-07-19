@@ -68,6 +68,7 @@ test "$(cat "$repo_root/RELEASE_VERSION")" = 'v1.0.0'
 grep -F 'branches:' "$repo_root/.github/workflows/release.yml"
 grep -F 'RELEASE_VERSION' "$repo_root/.github/workflows/release.yml"
 grep -F '.github/workflows/release.yml' "$repo_root/.github/workflows/release.yml"
+grep -F 'scripts/publish-release.sh' "$repo_root/.github/workflows/release.yml"
 grep -F 'group: verified-release-${{ github.repository }}' \
   "$repo_root/.github/workflows/release.yml"
 grep -F 'git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main' \
@@ -79,6 +80,11 @@ grep -F 'draft:true' "$repo_root/scripts/publish-release.sh"
 grep -F "printf '{\"draft\":false}" "$repo_root/scripts/publish-release.sh"
 grep -F 'target_commitish:$sha' "$repo_root/scripts/publish-release.sh"
 grep -F 'existing_commit=$(resolve_tag_commit)' "$repo_root/scripts/publish-release.sh"
+grep -F 'ensure_tag_ref "$release_sha"' "$repo_root/scripts/publish-release.sh"
+grep -F 'sha256:$(sha256sum "$candidate_dir/$archive_name"' \
+  "$repo_root/scripts/publish-release.sh"
+grep -F 'unverified untagged Release exists; refusing to create a duplicate' \
+  "$repo_root/scripts/publish-release.sh"
 if grep -F 'gh api --method POST "repos/$GITHUB_REPOSITORY/git/tags"' \
   "$repo_root/.github/workflows/release.yml"; then
   echo 'release workflow uses the failed standalone annotated-tag API path' >&2

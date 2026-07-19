@@ -9,6 +9,7 @@ on:
     paths:
       - RELEASE_VERSION
       - .github/workflows/release.yml
+      - scripts/publish-release.sh
   workflow_dispatch:
     inputs:
       release_tag:
