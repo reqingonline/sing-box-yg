@@ -105,7 +105,11 @@ sudo /usr/local/lib/sing-box-yg/scripts/sb-doctor.sh
 
 * Argo高度自定义：可以重置临时隧道; 可以继续使用上回的固定隧道; 也可以更换固定隧道的域名或token
 
-Serv00 也必须从已校验的 Release 包运行：解压后执行 `bash sing-box-yg-<TAG>/serv00.sh`。GitHub 保活请把 `serv00.yml` 复制为工作流，并将账号 JSON 保存到仓库 Secret `SERV00_ACCOUNTS`，不要写进 YAML。
+Serv00 也必须从已校验的 Release 包运行：解压后执行 `bash sing-box-yg-<TAG>/serv00.sh`。脚本会校验 Serv00/FreeBSD 二进制的固定 SHA-256，校验失败即停止，不会执行被替换的远程文件。GitHub 保活请把 `serv00.yml` 复制为工作流，将账号 JSON 保存到仓库 Secret `SERV00_ACCOUNTS`，并把服务器的 OpenSSH `known_hosts` 内容保存到 `SERV00_KNOWN_HOSTS`；账号、密码和主机指纹都不要写进 YAML。
+
+Serv00 网页功能统一使用节点 UUID 作为访问路径令牌，例如 `https://主机/up/<UUID>`、`/re/<UUID>`、`/rp/<UUID>`、`/jc/<UUID>` 和 `/list/<UUID>`。`/jc` 只返回本项目的布尔健康状态，不再公开系统进程命令行。把完整保活 URL 仅保存到 GitHub Secret，不要公开、截图或写入仓库；旧的不带令牌路径会返回 404。
+
+Serv00 的 Gemini 分流方案不再内置任何共享 WARP 私钥。若确实需要 WARP，请在运行脚本前通过环境变量提供用户自有设备参数：`SBYG_WARP_PRIVATE_KEY`、`SBYG_WARP_LOCAL_IPV4`、`SBYG_WARP_LOCAL_IPV6` 与三个逗号分隔整数的 `SBYG_WARP_RESERVED`；缺少任一参数时会安全降级为 `direct`，不会使用仓库中的公共凭据。
 
 #### Serv00/Hostuno-sb-yg脚本界面预览图，仅限方案一的SSH端安装脚本（注：仅供围观）
 ![a6b776a094566ab14e88fdcd70ba9e9](https://github.com/user-attachments/assets/90a918ed-aec7-4a1f-8159-97f3acfd0092)

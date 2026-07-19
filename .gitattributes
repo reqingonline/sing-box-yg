@@ -5,5 +5,7 @@
 *.js text eol=lf
 *.html text eol=lf
 *.md text eol=lf
+*.sha256 text eol=lf
 version text eol=lf
 sversion text eol=lf
+RELEASE_VERSION text eol=lf

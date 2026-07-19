@@ -14,7 +14,7 @@ umask 077
 sbyg_load_library() {
   local name=$1 root script_root
   script_root=$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)
-  for root in "${SBYG_LIB_DIR:-}" "$HOME/.sbyg/lib" "$script_root/lib"; do
+  for root in "${SBYG_LIB_DIR:-}" "$HOME/.local/share/sing-box-yg/lib" "$HOME/.sbyg/lib" "$script_root/lib"; do
     [[ -n "$root" && -r "$root/$name.sh" ]] || continue
     . "$root/$name.sh"
     return 0
@@ -28,7 +28,8 @@ SBYG_STATE_DIR=${SBYG_STATE_DIR:-$HOME/.sbyg}
 SBYG_ASSET_MANIFEST=${SBYG_ASSET_MANIFEST:-$SBYG_STATE_DIR/assets.v1}
 SBYG_PID_MANIFEST=${SBYG_PID_MANIFEST:-$SBYG_STATE_DIR/pids.v1}
 SBYG_SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)
-SBYG_ASSET_DIR=${SBYG_ASSET_DIR:-$SBYG_SCRIPT_DIR}
+SBYG_ASSET_DIR=${SBYG_ASSET_DIR:-$HOME/.local/share/sing-box-yg}
+[ -d "$SBYG_ASSET_DIR" ] || SBYG_ASSET_DIR=$SBYG_SCRIPT_DIR
 
 sbyg_serv00_install_asset() {
   local name=$1 destination=$2 mode=${3:-600} temporary
@@ -51,9 +52,12 @@ sbyg_serv00_register_asset() {
 sbyg_serv00_seed_legacy_assets() {
   local safe_workdir path name
   safe_workdir=${WORKDIR:-$HOME/domains/$(whoami | tr '[:upper:]' '[:lower:]').serv00.net/logs}
-  for path in "$HOME/serv00keep.sh" "$HOME/webport.sh" "$HOME/bin/sb"; do
+  for path in "$HOME/serv00keep.sh" "$HOME/webport.sh" "$HOME/bin/sb" \
+    "$HOME/.local/share/sing-box-yg"; do
     sbyg_serv00_register_asset "$path" || return
   done
+  [ -z "${keep_path:-}" ] || sbyg_serv00_register_asset "$keep_path/app.js" || return
+  [ -z "${FILE_PATH:-}" ] || sbyg_serv00_register_asset "$FILE_PATH/index.html" || return
   for name in config.json config.yml tunnel.yml tunnel.json sb.log boot.log \
     ARGO_AUTH.log ARGO_DOMAIN.log ip.txt list.txt sb.txt ag.txt; do
     sbyg_serv00_register_asset "$safe_workdir/$name" || return
@@ -76,6 +80,75 @@ sbyg_serv00_cleanup_owned() {
   : > "$SBYG_PID_MANIFEST"
   chmod 600 "$SBYG_PID_MANIFEST"
   sbyg_cleanup_manifest "$SBYG_ASSET_MANIFEST" "$HOME"
+}
+
+sbyg_serv00_stop_from_file() {
+  local marker_file=${1-} marker
+  declare -F sbyg_kill_recorded_marker >/dev/null 2>&1 || return 1
+  [ -f "$marker_file" ] || return 0
+  marker=$(cat "$marker_file" 2>/dev/null)
+  case $marker in ''|*[!A-Za-z0-9._-]*) return 2 ;; esac
+  sbyg_kill_recorded_marker "$SBYG_PID_MANIFEST" "$marker"
+}
+
+sbyg_serv00_sha256_file() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print tolower($1)}'
+  elif command -v sha256 >/dev/null 2>&1; then
+    sha256 -q "$1" | tr '[:upper:]' '[:lower:]'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{print tolower($1)}'
+  else
+    red "缺少 SHA-256 校验工具，拒绝执行远程二进制"
+    return 1
+  fi
+}
+
+sbyg_serv00_verify_dependency() {
+  local file=$1 asset=$2 manifest expected actual
+  manifest="$SBYG_ASSET_DIR/serv00-assets.sha256"
+  [ -s "$file" ] && [ -r "$manifest" ] || return 1
+  expected=$(awk -v name="$asset" '$2 == name || $2 == ("*" name) {print tolower($1); exit}' "$manifest")
+  case $expected in
+    ''|*[!0-9a-f]*) return 1 ;;
+  esac
+  [ "${#expected}" -eq 64 ] || return 1
+  actual=$(sbyg_serv00_sha256_file "$file") || return
+  [ "$actual" = "$expected" ]
+}
+
+sbyg_serv00_use_existing_dependency() {
+  local marker_file=$1 asset=$2 role=$3 name
+  [ -s "$marker_file" ] || return 1
+  name=$(cat "$marker_file" 2>/dev/null)
+  case $name in ''|*[!A-Za-z0-9._-]*) return 1 ;; esac
+  [ -f "$name" ] && sbyg_serv00_verify_dependency "$name" "$asset" || return 1
+  FILE_MAP[$role]=$name
+}
+
+sbyg_serv00_drop_marked_dependency() {
+  local marker_file=$1 name
+  if [ -s "$marker_file" ]; then
+    name=$(cat "$marker_file" 2>/dev/null)
+    case $name in ''|*[!A-Za-z0-9._-]*) name= ;; esac
+    [ -z "$name" ] || rm -f -- "$name"
+  fi
+  rm -f -- "$marker_file"
+}
+
+sbyg_serv00_launch_argo() {
+  local binary=$1 token_file=$2 token pid
+  shift 2
+  if [ -s "$token_file" ]; then
+    token=$(cat "$token_file") || return 1
+    TUNNEL_TOKEN="$token" nohup ./"$binary" "$@" >/dev/null 2>&1 &
+  else
+    nohup ./"$binary" "$@" >/dev/null 2>&1 &
+  fi
+  pid=$!
+  unset token
+  declare -F sbyg_pid_manifest_add >/dev/null 2>&1 && \
+    sbyg_pid_manifest_add "$SBYG_PID_MANIFEST" "$pid" "$binary" || true
 }
 export LC_ALL=C
 export UUID=${UUID:-''}  
@@ -133,11 +206,11 @@ else
 echo "$UUID" > $WORKDIR/UUID.txt
 UUID=$(cat "$WORKDIR/UUID.txt" 2>/dev/null)
 fi
-sbyg_serv00_install_asset app.js "$keep_path/app.js" 600 || exit 1
-sed -i '' "15s/name/$snb/g" "$keep_path"/app.js
-sed -i '' "59s/key/$UUID/g" "$keep_path"/app.js
-sed -i '' "90s/name/$USERNAME/g" "$keep_path"/app.js
-sed -i '' "90s/where/$snb/g" "$keep_path"/app.js
+SBYG_APP_CHANGED=0
+if ! cmp -s "$SBYG_ASSET_DIR/app.js" "$keep_path/app.js"; then
+  sbyg_serv00_install_asset app.js "$keep_path/app.js" 600 || exit 1
+  SBYG_APP_CHANGED=1
+fi
 if [[ -z "$reym" ]] && [[ -f "$WORKDIR/reym.txt" ]]; then
 reym=$(cat "$WORKDIR/reym.txt" 2>/dev/null)
 elif [[ -z "$reym" ]] && [[ ! -f "$WORKDIR/reym.txt" ]]; then
@@ -169,12 +242,9 @@ sed -i '' "33s/$hyp/$hy2_port/g" $WORKDIR/config.json
 sed -i '' "54s/$hyp/$hy2_port/g" $WORKDIR/config.json
 sed -i '' "75s/$vlp/$vless_port/g" $WORKDIR/config.json
 sed -i '' "102s/$vmp/$vmess_port/g" $WORKDIR/config.json
-sed -i '' -e "17s|'$vlp'|'$vless_port'|" serv00keep.sh
-sed -i '' -e "18s|'$vmp'|'$vmess_port'|" serv00keep.sh
-sed -i '' -e "19s|'$hyp'|'$hy2_port'|" serv00keep.sh
-ps aux | grep '[r]un -c con' | awk '{print $2}' | xargs -r kill -9 > /dev/null 2>&1
+sbyg_serv00_stop_from_file "$WORKDIR/sb.txt" 2>/dev/null || true
 sleep 1
-curl -fsS "https://${snb}.${USERNAME}.serv00.net/up" > /dev/null 2>&1
+curl -fsS "https://${snb}.${USERNAME}.serv00.net/up/${UUID}" > /dev/null 2>&1
 sleep 5
 }
 
@@ -257,7 +327,6 @@ if [[ $tcp_ports -ne 2 || $udp_ports -ne 1 ]]; then
     #echo "端口已调整完成,将断开ssh连接"
     sleep 3
     #devil binexec on >/dev/null 2>&1
-    #kill -9 $(ps -o ppid= -p $$) >/dev/null 2>&1
     port_list=$(devil port list)
     tcp_ports=$(echo "$port_list" | grep -c "tcp")
     udp_ports=$(echo "$port_list" | grep -c "udp")
@@ -304,8 +373,9 @@ get_argodomain() {
   fi
 }
 
-if [ ! -f serv00keep.sh ]; then
-sbyg_serv00_install_asset serv00keep.sh "$SBYG_ASSET_DIR/serv00keep.sh" 700 || exit 1
+SBYG_WEB_SETUP=0
+if [ ! -f "$HOME/webport.sh" ]; then
+SBYG_WEB_SETUP=1
 echo '#!/bin/bash
 red() { echo -e "\e[1;91m$1\033[0m"; }
 green() { echo -e "\e[1;32m$1\033[0m"; }
@@ -323,18 +393,13 @@ green "开始安装多功能主页，请稍等……"
 devil www del ${snb}.${USERNAME}.serv00.net > /dev/null 2>&1
 devil www add ${USERNAME}.serv00.net php > /dev/null 2>&1
 devil www add ${snb}.${USERNAME}.serv00.net nodejs /usr/local/bin/node18 > /dev/null 2>&1
-ln -fs /usr/local/bin/node18 ~/bin/node > /dev/null 2>&1
-ln -fs /usr/local/bin/npm18 ~/bin/npm > /dev/null 2>&1
-mkdir -p ~/.npm-global
-npm config set prefix '~/.npm-global'
-echo 'export PATH=~/.npm-global/bin:~/bin:$PATH' >> $HOME/.bash_profile && source $HOME/.bash_profile
-rm -rf $HOME/.npmrc > /dev/null 2>&1
-cd "$keep_path"
-npm install basic-auth express dotenv axios --silent > /dev/null 2>&1
-rm $HOME/domains/${snb}.${USERNAME}.serv00.net/public_nodejs/public/index.html > /dev/null 2>&1
-devil www restart ${snb}.${USERNAME}.serv00.net
-green "安装完毕，多功能主页地址：https://${snb}.${USERNAME}.serv00.net"
+rm -f -- "$HOME/domains/${snb}.${USERNAME}.serv00.net/public_nodejs/public/index.html" > /dev/null 2>&1
 fi
+sbyg_serv00_install_asset serv00keep.sh "$HOME/serv00keep.sh" 700 || exit 1
+if [ "$SBYG_APP_CHANGED" = 1 ] || [ "$SBYG_WEB_SETUP" = 1 ]; then
+  devil www restart ${snb}.${USERNAME}.serv00.net
+fi
+green "多功能主页已更新：https://${snb}.${USERNAME}.serv00.net"
 
 if [[ "$resport" =~ ^[Yy]$ ]]; then
 portlist=$(devil port list | grep -E '^[0-9]+[[:space:]]+[a-zA-Z]+' | sed 's/^[[:space:]]*//')
@@ -350,11 +415,11 @@ done <<< "$portlist"
 fi
 check_port
 fi
-rm -rf $HOME/domains/${snb}.${USERNAME}.serv00.net/logs/*
+rm -f -- "$WORKDIR/ip.txt"
 
 cd $WORKDIR
 ym=("$HOSTNAME" "cache$nb.serv00.com" "web$nb.serv00.com")
-rm -rf ip.txt
+rm -f -- "$WORKDIR/ip.txt"
 for host in "${ym[@]}"; do
 response=$(curl -sL --connect-timeout 5 --max-time 7 "https://ss.fkj.pp.ua/api/getip?host=$host")
 if [[ "$response" =~ (unknown|not|error) ]]; then
@@ -386,10 +451,13 @@ fi
 if [[ -z "$vless_port" ]] || [[ -z "$vmess_port" ]] || [[ -z "$hy2_port" ]]; then
 check_port
 fi
-if [ ! -s sb.txt ] && [ ! -s ag.txt ]; then
-DOWNLOAD_DIR="." && mkdir -p "$DOWNLOAD_DIR" && FILE_INFO=()
-FILE_INFO=("https://github.com/yonggekkk/Cloudflare_vless_trojan/releases/download/serv00/sb web" "https://github.com/yonggekkk/Cloudflare_vless_trojan/releases/download/serv00/server bot")
 declare -A FILE_MAP
+if ! sbyg_serv00_use_existing_dependency sb.txt sb web || \
+   ! sbyg_serv00_use_existing_dependency ag.txt server bot; then
+sbyg_serv00_drop_marked_dependency sb.txt
+sbyg_serv00_drop_marked_dependency ag.txt
+DOWNLOAD_DIR="." && mkdir -p "$DOWNLOAD_DIR" && FILE_INFO=()
+FILE_INFO=("https://github.com/yonggekkk/Cloudflare_vless_trojan/releases/download/serv00/sb web sb" "https://github.com/yonggekkk/Cloudflare_vless_trojan/releases/download/serv00/server bot server")
 generate_random_name() {
     local chars=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890
     local name=""
@@ -402,40 +470,42 @@ generate_random_name() {
 download_with_fallback() {
     local URL=$1
     local NEW_FILENAME=$2
+    local ASSET=$3
 
-    curl -L -sS --max-time 2 -o "$NEW_FILENAME" "$URL" &
-    CURL_PID=$!
-    CURL_START_SIZE=$(stat -c%s "$NEW_FILENAME" 2>/dev/null || echo 0)
-    
-    sleep 1
-    CURL_CURRENT_SIZE=$(stat -c%s "$NEW_FILENAME" 2>/dev/null || echo 0)
-    
-    if [ "$CURL_CURRENT_SIZE" -le "$CURL_START_SIZE" ]; then
-        kill $CURL_PID 2>/dev/null
-        wait $CURL_PID 2>/dev/null
-        wget -q -O "$NEW_FILENAME" "$URL"
-        echo -e "\e[1;32mDownloading $NEW_FILENAME by wget\e[0m"
-    else
-        wait $CURL_PID
-        echo -e "\e[1;32mDownloading $NEW_FILENAME by curl\e[0m"
+    rm -f -- "$NEW_FILENAME"
+    if ! curl --fail --location --silent --show-error \
+      --proto '=https' --tlsv1.2 --connect-timeout 15 --max-time 300 \
+      --retry 3 --retry-delay 2 -o "$NEW_FILENAME" "$URL"; then
+        rm -f -- "$NEW_FILENAME"
+        command -v wget >/dev/null 2>&1 || return 1
+        wget --https-only --timeout=300 --tries=3 -q -O "$NEW_FILENAME" "$URL" || {
+          rm -f -- "$NEW_FILENAME"
+          return 1
+        }
+    fi
+    if ! sbyg_serv00_verify_dependency "$NEW_FILENAME" "$ASSET"; then
+        rm -f -- "$NEW_FILENAME"
+        red "远程依赖 $ASSET 的 SHA-256 校验失败，已拒绝执行"
+        return 1
     fi
 }
 
 for entry in "${FILE_INFO[@]}"; do
     URL=$(echo "$entry" | cut -d ' ' -f 1)
+    ROLE=$(echo "$entry" | cut -d ' ' -f 2)
+    ASSET=$(echo "$entry" | cut -d ' ' -f 3)
     RANDOM_NAME=$(generate_random_name)
     NEW_FILENAME="$DOWNLOAD_DIR/$RANDOM_NAME"
     
     if [ -e "$NEW_FILENAME" ]; then
         echo -e "\e[1;32m$NEW_FILENAME already exists, Skipping download\e[0m"
     else
-        download_with_fallback "$URL" "$NEW_FILENAME"
+        download_with_fallback "$URL" "$NEW_FILENAME" "$ASSET" || return 1
     fi
     
     chmod +x "$NEW_FILENAME"
-    FILE_MAP[$(echo "$entry" | cut -d ' ' -f 2)]="$NEW_FILENAME"
+    FILE_MAP[$ROLE]="$NEW_FILENAME"
 done
-wait
 fi
 
 if [ ! -e private_key.txt ]; then
@@ -449,6 +519,62 @@ private_key=$(<private_key.txt)
 public_key=$(<public_key.txt)
 openssl ecparam -genkey -name prime256v1 -out "private.key"
 openssl req -new -x509 -days 3650 -key "private.key" -out "cert.pem" -subj "/CN=$USERNAME.serv00.net"
+
+# Gemini plans may optionally use a user-owned Cloudflare WARP device.  Do not
+# ship a shared WireGuard private key in the repository: it is a credential and
+# can be revoked or abused by anyone who copies it.  When the complete account
+# tuple is absent, these plans safely fall back to the normal direct outbound.
+warp_enabled=0
+warp_outbound_json=''
+if [[ "$nb" =~ ^(14|15)$ ]]; then
+  if [[ -n "${SBYG_WARP_PRIVATE_KEY:-}" && -n "${SBYG_WARP_LOCAL_IPV4:-}" && \
+        -n "${SBYG_WARP_LOCAL_IPV6:-}" && -n "${SBYG_WARP_RESERVED:-}" ]]; then
+    if [[ ! "$SBYG_WARP_PRIVATE_KEY" =~ ^[A-Za-z0-9+/]{43}=$ ||
+          ! "$SBYG_WARP_LOCAL_IPV4" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}/[0-9]{1,2}$ ||
+          ! "$SBYG_WARP_LOCAL_IPV6" =~ ^[0-9A-Fa-f:]+/[0-9]{1,3}$ ]]; then
+      red "WARP 参数格式无效，已拒绝写入配置"
+      return 1
+    fi
+    IFS=',' read -r warp_reserved_1 warp_reserved_2 warp_reserved_3 warp_reserved_extra \
+      <<< "$SBYG_WARP_RESERVED"
+    for warp_reserved_value in "$warp_reserved_1" "$warp_reserved_2" "$warp_reserved_3"; do
+      if [[ ! "$warp_reserved_value" =~ ^[0-9]{1,3}$ ]] || ((10#$warp_reserved_value > 255)); then
+        red "WARP reserved 必须是三个 0-255 的十进制整数"
+        return 1
+      fi
+    done
+    if [[ -n "$warp_reserved_extra" ]]; then
+      red "WARP reserved 必须恰好包含三个整数"
+      return 1
+    fi
+    warp_reserved_1=$((10#$warp_reserved_1))
+    warp_reserved_2=$((10#$warp_reserved_2))
+    warp_reserved_3=$((10#$warp_reserved_3))
+    warp_outbound_json=$(cat <<EOF
+     {
+        "type": "wireguard",
+        "tag": "wg",
+        "server": "162.159.192.200",
+        "server_port": 4500,
+        "local_address": [
+                "$SBYG_WARP_LOCAL_IPV4",
+                "$SBYG_WARP_LOCAL_IPV6"
+        ],
+        "private_key": "$SBYG_WARP_PRIVATE_KEY",
+        "peer_public_key": "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=",
+        "reserved": [
+            $warp_reserved_1,
+            $warp_reserved_2,
+            $warp_reserved_3
+        ]
+    },
+EOF
+)
+    warp_enabled=1
+  else
+    yellow "未配置用户自有 WARP 凭据，Gemini 分流将使用 direct"
+  fi
+fi
   cat > config.json << EOF
 {
   "log": {
@@ -565,24 +691,8 @@ openssl req -new -x509 -days 3650 -key "private.key" -out "cert.pem" -subj "/CN=
     }
  ],
      "outbounds": [
+$warp_outbound_json
      {
-        "type": "wireguard",
-        "tag": "wg",
-        "server": "162.159.192.200",
-        "server_port": 4500,
-        "local_address": [
-                "172.16.0.2/32",
-                "2606:4700:110:8f77:1ca9:f086:846c:5f9e/128"
-        ],
-        "private_key": "wIxszdR2nMdA7a2Ul3XQcniSfSZqdqjPb6w6opvf5AU=",
-        "peer_public_key": "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=",
-        "reserved": [
-            126,
-            246,
-            173
-        ]
-    },
-    {
       "type": "direct",
       "tag": "direct"
     }
@@ -598,7 +708,7 @@ openssl req -new -x509 -days 3650 -key "private.key" -out "cert.pem" -subj "/CN=
       }
     ],
 EOF
-if [[ "$nb" =~ 14|15 ]]; then
+if [[ "$warp_enabled" == 1 ]]; then
 cat >> config.json <<EOF 
     "rules": [
     {
@@ -627,7 +737,7 @@ EOF
 fi
 
 if ! ps aux | grep '[r]un -c con' > /dev/null; then
-ps aux | grep '[r]un -c con' | awk '{print $2}' | xargs -r kill -9 > /dev/null 2>&1
+sbyg_serv00_stop_from_file "$WORKDIR/sb.txt" 2>/dev/null || true
 if [ -e "$(basename "${FILE_MAP[web]}")" ]; then
    echo "$(basename "${FILE_MAP[web]}")" > sb.txt
    sbb=$(cat sb.txt)   
@@ -638,7 +748,7 @@ if pgrep -x "$sbb" > /dev/null; then
     green "$sbb 主进程已启动"
 else
     red "$sbb 主进程未启动, 重启中..."
-    pkill -x "$sbb"
+    sbyg_kill_recorded_marker "$SBYG_PID_MANIFEST" "$sbb" 2>/dev/null || true
     nohup ./"$sbb" run -c config.json >/dev/null 2>&1 &
     declare -F sbyg_pid_manifest_add >/dev/null 2>&1 && sbyg_pid_manifest_add "$SBYG_PID_MANIFEST" "$!" "$sbb" || true
     sleep 2
@@ -653,7 +763,7 @@ if pgrep -x "$sbb" > /dev/null; then
     green "$sbb 主进程已启动"
 else
     red "$sbb 主进程未启动, 重启中..."
-    pkill -x "$sbb"
+    sbyg_kill_recorded_marker "$SBYG_PID_MANIFEST" "$sbb" 2>/dev/null || true
     nohup ./"$sbb" run -c config.json >/dev/null 2>&1 &
     declare -F sbyg_pid_manifest_add >/dev/null 2>&1 && sbyg_pid_manifest_add "$SBYG_PID_MANIFEST" "$!" "$sbb" || true
     sleep 2
@@ -664,50 +774,44 @@ else
 green "主进程已启动"
 fi
 cfgo() {
-rm -rf boot.log
+rm -f -- boot.log
 if [ -e "$(basename "${FILE_MAP[bot]}")" ]; then
    echo "$(basename "${FILE_MAP[bot]}")" > ag.txt
    agg=$(cat ag.txt)
     if [[ $ARGO_AUTH =~ ^[A-Z0-9a-z=]{120,250}$ ]]; then
-      #args="tunnel --edge-ip-version auto --no-autoupdate --protocol http2 run --token ${ARGO_AUTH}"
-      args="tunnel --no-autoupdate run --token ${ARGO_AUTH}"
+      argo_args=(tunnel --no-autoupdate run)
     else
      #args="tunnel --edge-ip-version auto --no-autoupdate --protocol http2 --logfile boot.log --loglevel info --url http://localhost:$vmess_port"
-     args="tunnel --url http://localhost:$vmess_port --no-autoupdate --logfile boot.log --loglevel info"
+     argo_args=(tunnel --url "http://localhost:$vmess_port" --no-autoupdate --logfile boot.log --loglevel info)
     fi
-    nohup ./"$agg" $args >/dev/null 2>&1 &
-    declare -F sbyg_pid_manifest_add >/dev/null 2>&1 && sbyg_pid_manifest_add "$SBYG_PID_MANIFEST" "$!" "$agg" || true
+    sbyg_serv00_launch_argo "$agg" "$WORKDIR/ARGO_AUTH.log" "${argo_args[@]}"
     sleep 10
 if pgrep -x "$agg" > /dev/null; then
     green "$agg Arog进程已启动"
 else
     red "$agg Argo进程未启动, 重启中..."
-    pkill -x "$agg"
-    nohup ./"$agg" "${args}" >/dev/null 2>&1 &
-    declare -F sbyg_pid_manifest_add >/dev/null 2>&1 && sbyg_pid_manifest_add "$SBYG_PID_MANIFEST" "$!" "$agg" || true
+    sbyg_kill_recorded_marker "$SBYG_PID_MANIFEST" "$agg" 2>/dev/null || true
+    sbyg_serv00_launch_argo "$agg" "$WORKDIR/ARGO_AUTH.log" "${argo_args[@]}"
     sleep 5
     purple "$agg Argo进程已重启"
 fi
 else
    agg=$(cat ag.txt)
     if [[ $ARGO_AUTH =~ ^[A-Z0-9a-z=]{120,250}$ ]]; then
-      #args="tunnel --edge-ip-version auto --no-autoupdate --protocol http2 run --token ${ARGO_AUTH}"
-      args="tunnel --no-autoupdate run --token ${ARGO_AUTH}"
+      argo_args=(tunnel --no-autoupdate run)
     else
      #args="tunnel --edge-ip-version auto --no-autoupdate --protocol http2 --logfile boot.log --loglevel info --url http://localhost:$vmess_port"
-     args="tunnel --url http://localhost:$vmess_port --no-autoupdate --logfile boot.log --loglevel info"
+     argo_args=(tunnel --url "http://localhost:$vmess_port" --no-autoupdate --logfile boot.log --loglevel info)
     fi
-    pkill -x "$agg"
-    nohup ./"$agg" $args >/dev/null 2>&1 &
-    declare -F sbyg_pid_manifest_add >/dev/null 2>&1 && sbyg_pid_manifest_add "$SBYG_PID_MANIFEST" "$!" "$agg" || true
+    sbyg_kill_recorded_marker "$SBYG_PID_MANIFEST" "$agg" 2>/dev/null || true
+    sbyg_serv00_launch_argo "$agg" "$WORKDIR/ARGO_AUTH.log" "${argo_args[@]}"
     sleep 10
 if pgrep -x "$agg" > /dev/null; then
     green "$agg Arog进程已启动"
 else
     red "$agg Argo进程未启动, 重启中..."
-    pkill -x "$agg"
-    nohup ./"$agg" "${args}" >/dev/null 2>&1 &
-    declare -F sbyg_pid_manifest_add >/dev/null 2>&1 && sbyg_pid_manifest_add "$SBYG_PID_MANIFEST" "$!" "$agg" || true
+    sbyg_kill_recorded_marker "$SBYG_PID_MANIFEST" "$agg" 2>/dev/null || true
+    sbyg_serv00_launch_argo "$agg" "$WORKDIR/ARGO_AUTH.log" "${argo_args[@]}"
     sleep 5
     purple "$agg Argo进程已重启"
 fi
@@ -719,10 +823,10 @@ argosl=$(cat "$WORKDIR/boot.log" 2>/dev/null | grep -a trycloudflare.com | awk '
 checkhttp=$(curl -o /dev/null -s -w "%{http_code}\n" "https://$argosl")
 fi
 if ([ -z "$ARGO_DOMAIN" ] && ! ps aux | grep '[t]unnel --u' > /dev/null) || [[ "$checkhttp" != 404 ]]; then
-ps aux | grep '[t]unnel --u' | awk '{print $2}' | xargs -r kill -9 > /dev/null 2>&1
+sbyg_serv00_stop_from_file "$WORKDIR/ag.txt" 2>/dev/null || true
 cfgo
 elif [ -n "$ARGO_DOMAIN" ] && ! ps aux | grep '[t]unnel --n' > /dev/null; then
-ps aux | grep '[t]unnel --n' | awk '{print $2}' | xargs -r kill -9 > /dev/null 2>&1
+sbyg_serv00_stop_from_file "$WORKDIR/ag.txt" 2>/dev/null || true
 cfgo
 else
 green "Arog进程已启动"
@@ -738,7 +842,12 @@ fi
 
 
 argodomain=$(get_argodomain)
-rm -rf ${FILE_PATH}/*.txt
+for sbyg_subscription_file in \
+  "$FILE_PATH/${UUID}_v2sub.txt" \
+  "$FILE_PATH/${UUID}_clashmeta.txt" \
+  "$FILE_PATH/${UUID}_singbox.txt"; do
+  rm -f -- "$sbyg_subscription_file"
+done
 echo -e "\e[1;32mArgo域名：\e[1;35m${argodomain}\e[0m\n"
 a=$(dig @8.8.8.8 +time=5 +short "web$nb.serv00.com" | sort -u)
 b=$(dig @8.8.8.8 +time=5 +short "$HOSTNAME" | sort -u)
@@ -1376,5 +1485,5 @@ $Singbox_LINK
 EOF
 cat list.txt
 sleep 2
-rm -rf sb.log core tunnel.yml tunnel.json fake_useragent_0.2.0.json
+rm -f -- sb.log core tunnel.yml tunnel.json fake_useragent_0.2.0.json
 cd

@@ -18,11 +18,18 @@ jobs:
       - name: Install declared dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y sshpass jq
+          sudo apt-get install -y sshpass jq openssh-client
       - name: Process encrypted Serv00 account list
         env:
           ACCOUNTS: ${{ secrets.SERV00_ACCOUNTS }}
+          KNOWN_HOSTS: ${{ secrets.SERV00_KNOWN_HOSTS }}
         run: |
           set -euo pipefail
           test -n "$ACCOUNTS"
+          test -n "$KNOWN_HOSTS"
+          printf '%s' "$ACCOUNTS" | jq -e 'type == "array" and length > 0' >/dev/null
+          install -d -m 700 "$RUNNER_TEMP/ssh"
+          printf '%s\n' "$KNOWN_HOSTS" > "$RUNNER_TEMP/ssh/known_hosts"
+          chmod 600 "$RUNNER_TEMP/ssh/known_hosts"
+          export SBYG_KNOWN_HOSTS_FILE="$RUNNER_TEMP/ssh/known_hosts"
           bash kp.sh

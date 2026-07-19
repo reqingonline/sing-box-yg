@@ -1,49 +1,61 @@
-name: Keep Servers serv00
+name: Keep Serv00 SSH accounts alive
+
 on:
   schedule:
-   - cron: '0 15 */8 * *'
-  workflow_dispatch: 
+    - cron: '0 15 */8 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
-  keep_servers_alive:
-    runs-on: ubuntu-latest
+  keep-servers-alive:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     env:
-      ACCOUNTS: >
-        [
-        {"SSH_USER":"123456789", "SSH_PASS":"123456", "HOST":"sxxx.serv00.com"}
-        ]
+      ACCOUNTS_JSON: ${{ secrets.SERV00_ACCOUNTS }}
+      KNOWN_HOSTS: ${{ secrets.SERV00_KNOWN_HOSTS }}
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4.2.2
-
-      - name: Install required packages
+      - name: Checkout verified automation
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Install declared dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y sshpass jq
-
-      - name: Process each account
+          sudo apt-get install -y jq openssh-client sshpass
+      - name: Verify host keys and connect
         run: |
-           echo "*****************************************************"
-           echo "*****************************************************"
-           echo "甬哥Github项目  ：github.com/yonggekkk"
-           echo "甬哥Blogger博客 ：ygkkk.blogspot.com"
-           echo "甬哥YouTube频道 ：www.youtube.com/@ygkkk"
-           echo "vps服务器远程登录一次SSH脚本【Github】"
-           echo "*****************************************************"
-           echo "*****************************************************"
-            count=0  
-           for account in $(echo "${ACCOUNTS}" | jq -c '.[]'); do
-              count=$((count+1))
-              SSH_USER=$(echo $account | jq -r '.SSH_USER')
-              SSH_PASS=$(echo $account | jq -r '.SSH_PASS')
-              HOST=$(echo $account | jq -r '.HOST')
-           if sshpass -p "$SSH_PASS" ssh -o StrictHostKeyChecking=no "$SSH_USER@$HOST" -q exit; then
-            echo "🎉恭喜！✅第【$count】台服务器连接成功！🚀服务器地址：$HOST ，账户名：$SSH_USER" 
-           else
-            echo "===================================================="
-            echo "💥杯具！❌第【$count】台服务器连接失败！🚀服务器地址：$HOST ，账户名：$SSH_USER"
-            echo "⚠️可能账号名、密码、服务器名称输入错误，或者当前服务器在维护中"  
-            echo "===================================================="
-           fi
-           sleep 10
-            done
+          set -euo pipefail
+          test -n "$ACCOUNTS_JSON"
+          test -n "$KNOWN_HOSTS"
+          jq -e 'type == "array" and length > 0' <<<"$ACCOUNTS_JSON" >/dev/null
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+          failures=0
+          count=0
+          while IFS= read -r account; do
+            count=$((count + 1))
+            SSH_USER=$(jq -er '.SSH_USER | strings' <<<"$account")
+            SSH_PASS=$(jq -er '.SSH_PASS | strings' <<<"$account")
+            HOST=$(jq -er '.HOST | strings' <<<"$account")
+            case "$SSH_USER" in ''|*[!A-Za-z0-9._-]*) echo "第 $count 个账号名格式无效"; failures=$((failures + 1)); continue ;; esac
+            case "$HOST" in ''|*[!A-Za-z0-9.-]*) echo "第 $count 个主机名格式无效"; failures=$((failures + 1)); continue ;; esac
+            if sshpass -d 3 ssh \
+              -o BatchMode=no \
+              -o ConnectTimeout=15 \
+              -o ConnectionAttempts=1 \
+              -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+              "$SSH_USER@$HOST" true 3<<<"$SSH_PASS"; then
+              echo "第 $count 台服务器连接成功（地址和账号已隐藏）"
+            else
+              echo "第 $count 台服务器连接失败（地址和账号已隐藏）"
+              failures=$((failures + 1))
+            fi
+            unset SSH_USER SSH_PASS HOST
+            sleep 2
+          done < <(jq -c '.[]' <<<"$ACCOUNTS_JSON")
+          test "$failures" -eq 0

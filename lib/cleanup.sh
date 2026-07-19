@@ -119,3 +119,32 @@ sbyg_kill_recorded_pids() {
   done < "$manifest"
   return "$status"
 }
+
+sbyg_kill_recorded_marker() {
+  local manifest=${1-} wanted=${2-} pid marker command_line temporary status=0
+  [ -f "$manifest" ] || return 0
+  [ ! -L "$manifest" ] || return 2
+  case $wanted in ''|*$'\t'*|*$'\n'*|*$'\r'*) return 2 ;; esac
+  temporary="${manifest}.sbyg.$$"
+  umask 077
+  : > "$temporary" || return
+  while IFS=$'\t' read -r pid marker; do
+    if [ "$marker" != "$wanted" ]; then
+      printf '%s\t%s\n' "$pid" "$marker" >> "$temporary" || {
+        rm -f -- "$temporary"
+        return 1
+      }
+      continue
+    fi
+    case $pid in ''|*[!0-9]*) status=1; continue ;; esac
+    [ "$pid" -gt 1 ] && [ "$pid" -ne "$$" ] || { status=1; continue; }
+    command_line=$(ps -p "$pid" -o command= 2>/dev/null || true)
+    case $command_line in
+      *"$marker"*) kill -TERM "$pid" 2>/dev/null || true ;;
+      *) status=1 ;;
+    esac
+  done < "$manifest"
+  chmod 600 "$temporary" || { rm -f -- "$temporary"; return 1; }
+  mv -f -- "$temporary" "$manifest" || return
+  return "$status"
+}

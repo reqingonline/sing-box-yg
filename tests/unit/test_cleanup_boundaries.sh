@@ -50,4 +50,22 @@ if grep -nE 'find ~ .*rm -rf|killall -9 -u|find ~ -type [fd] -exec (chmod|rm)' \
   exit 1
 fi
 
+pid_manifest="$fake_home/.sbyg/pids.v1"
+kill_log="$tmpdir/kill.log"
+printf '123\towned-core\n456\towned-tunnel\n' > "$pid_manifest"
+ps() {
+  case $2 in
+    123) printf '%s\n' "$fake_home/owned-core run" ;;
+    456) printf '%s\n' "$fake_home/owned-tunnel run" ;;
+  esac
+}
+kill() { printf '%s\n' "$*" >> "$kill_log"; }
+sbyg_kill_recorded_marker "$pid_manifest" owned-core
+grep -Fx -- '-TERM 123' "$kill_log"
+grep -Fx $'456\towned-tunnel' "$pid_manifest"
+if grep -F owned-core "$pid_manifest"; then
+  echo 'stopped PID remained in the project manifest' >&2
+  exit 1
+fi
+
 echo 'bounded cleanup: PASS'

@@ -9,14 +9,22 @@
 
 ## 创建发布
 
+默认发布流程不依赖维护者本机保存长期 GitHub token：
+
+1. 在发布 PR 中把根目录 `RELEASE_VERSION` 更新为新的 `vX.Y.Z`。
+2. 运行 `bash scripts/release-checks.sh`，提交并合并 PR。
+3. `Verified release` 工作流先验证发布提交属于远端 `main` 历史，再在受保护的 `main` 提交上创建对应的 annotated tag，生成确定性源码包和 `SHA256SUMS`，再发布 Release。
+4. 工作流可以安全重跑：已有标签必须仍指向同一提交，已有 Release 资产会校验后覆盖。
+
+如果维护者已配置签名密钥，也可以手动创建签名标签；标签必须与 `RELEASE_VERSION` 完全一致：
+
 ```bash
-git status --short
 bash scripts/release-checks.sh
 git tag -s vX.Y.Z -m 'vX.Y.Z'
 git push origin vX.Y.Z
 ```
 
-`Verified release` 工作流仅在 `v*` 标签运行，权限限定为该 job 的 `contents: write`。它用 `git archive` 与 `gzip -n` 创建确定性源码包，生成并在新目录复核 `SHA256SUMS`，然后发布资产。
+`Verified release` 的默认权限为 `contents: read`，只有发布 job 使用 `contents: write`。它会在创建标签前完成安全预检，并用 `git archive` 与 `gzip -n` 创建确定性源码包。
 
 发布后重新下载两个资产并执行：
 
@@ -26,3 +34,5 @@ tar -tzf sing-box-yg-vX.Y.Z.tar.gz >/dev/null
 ```
 
 不要上传生成的节点配置、订阅、token、测试 VPS 原始日志或包含真实地址的诊断文件。`main` 是开发通道，必须显式选择，不作为生产安装来源。
+
+更新 Serv00 的 `sb` 或 `server` 依赖时，必须在隔离主机完整下载资产、核对来源并更新 `serv00-assets.sha256`，随后运行安全预检。不得因为上游 Release 的 `digest` 为空而跳过校验。
