@@ -62,7 +62,16 @@ case $prefix in
   /*) ;;
   *) die 'prefix must be an absolute path' ;;
 esac
-[ "$prefix" != / ] || die 'prefix cannot be /'
+prefix=${prefix%/}
+[ -n "$prefix" ] || prefix=/
+case "/$prefix/" in
+  */../*) die 'prefix must not contain .. path segments' ;;
+esac
+case "$prefix" in
+  /|/bin|/boot|/dev|/etc|/home|/lib|/lib32|/lib64|/media|/mnt|/opt|/proc|/root|/run|/sbin|/srv|/sys|/tmp|/usr|/var)
+    die 'prefix must be a dedicated directory below a system root'
+    ;;
+esac
 
 architecture=${SBYG_TEST_ARCH:-$(uname -m)}
 case $architecture in

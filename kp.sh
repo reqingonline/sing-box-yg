@@ -31,7 +31,7 @@ local ARGO_AUTH=${12}
 local script_root keep_script asset
 script_root=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 keep_script="$script_root/serv00keep.sh"
-for asset in serv00keep.sh app.js index.html; do
+for asset in serv00keep.sh app.js package.json index.html; do
   [ -r "$script_root/$asset" ] || {
     echo "缺少本地 $asset，拒绝从未校验的远程分支直接执行" >&2
     return 1
@@ -44,7 +44,7 @@ done
   fi
   echo "正在安全部署 $HOST（敏感参数不会写入命令行或日志）"
   tar -czf - -C "$script_root" \
-    serv00keep.sh app.js index.html serv00-assets.sha256 \
+    serv00keep.sh app.js package.json index.html serv00-assets.sha256 \
     lib/cleanup.sh lib/secrets.sh | \
     sbyg_ssh "$SSH_PASS" "$SSH_USER@$HOST" \
       'umask 077; mkdir -p "$HOME/.local/share/sing-box-yg"; tar -xzf - -C "$HOME/.local/share/sing-box-yg"; chmod 700 "$HOME/.local/share/sing-box-yg/serv00keep.sh"'

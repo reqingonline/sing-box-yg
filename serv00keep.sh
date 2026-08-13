@@ -9,7 +9,29 @@ red() { echo -e "\e[1;91m$1\033[0m"; }
 green() { echo -e "\e[1;32m$1\033[0m"; }
 yellow() { echo -e "\e[1;33m$1\033[0m"; }
 purple() { echo -e "\e[1;35m$1\033[0m"; }
-reading() { read -p "$(red "$1")" "$2"; }
+reading() { IFS= read -r -p "$(red "$1")" "$2"; }
+sbyg_serv00_read_secret() {
+  local prompt=$1 variable=$2
+  IFS= read -r -s -p "$(red "$prompt")" "$variable"
+  printf '\n'
+}
+sbyg_serv00_port_from_config() {
+  local tag=${1-} file=${2-config.json} value
+  [ -n "$tag" ] && [ -r "$file" ] || return 2
+  value=$(jq -er --arg tag "$tag" '
+    [.inbounds[]? | select(.tag == $tag) | .listen_port] |
+    if length == 1 and (.[0] |
+      if type == "number" then . >= 1 and . <= 65535 and floor == . else false end)
+    then .[0] else empty end
+  ' "$file") || return 1
+  case "$value" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  printf '%s\n' "$value"
+}
+sbyg_serv00_argo_fixed() {
+  [ -s "${1-}" ]
+}
 umask 077
 sbyg_load_library() {
   local name=$1 root script_root
@@ -57,9 +79,11 @@ sbyg_serv00_seed_legacy_assets() {
     sbyg_serv00_register_asset "$path" || return
   done
   [ -z "${keep_path:-}" ] || sbyg_serv00_register_asset "$keep_path/app.js" || return
+  [ -z "${keep_path:-}" ] || sbyg_serv00_register_asset "$keep_path/package.json" || return
   [ -z "${FILE_PATH:-}" ] || sbyg_serv00_register_asset "$FILE_PATH/index.html" || return
   for name in config.json config.yml tunnel.yml tunnel.json sb.log boot.log \
-    ARGO_AUTH.log ARGO_DOMAIN.log ip.txt list.txt sb.txt ag.txt; do
+    ARGO_AUTH.log ARGO_DOMAIN.log ARGO_AUTH_show.log ARGO_DOMAIN_show.log \
+    ip.txt list.txt sb.txt ag.txt; do
     sbyg_serv00_register_asset "$safe_workdir/$name" || return
   done
   for name in sb.txt ag.txt; do
@@ -211,6 +235,10 @@ if ! cmp -s "$SBYG_ASSET_DIR/app.js" "$keep_path/app.js"; then
   sbyg_serv00_install_asset app.js "$keep_path/app.js" 600 || exit 1
   SBYG_APP_CHANGED=1
 fi
+if ! cmp -s "$SBYG_ASSET_DIR/package.json" "$keep_path/package.json"; then
+  sbyg_serv00_install_asset package.json "$keep_path/package.json" 600 || exit 1
+  SBYG_APP_CHANGED=1
+fi
 if [[ -z "$reym" ]] && [[ -f "$WORKDIR/reym.txt" ]]; then
 reym=$(cat "$WORKDIR/reym.txt" 2>/dev/null)
 elif [[ -z "$reym" ]] && [[ ! -f "$WORKDIR/reym.txt" ]]; then
@@ -234,9 +262,9 @@ devil port del "$port_type" "$port"
 done <<< "$portlist"
 fi
 check_port
-hyp=$(jq -r '.inbounds[0].listen_port' $WORKDIR/config.json)
-vlp=$(jq -r '.inbounds[3].listen_port' $WORKDIR/config.json)
-vmp=$(jq -r '.inbounds[4].listen_port' $WORKDIR/config.json)
+hyp=$(sbyg_serv00_port_from_config hy2-sb "$WORKDIR/config.json") || exit 1
+vlp=$(sbyg_serv00_port_from_config vless-sb "$WORKDIR/config.json") || exit 1
+vmp=$(sbyg_serv00_port_from_config vmess-sb "$WORKDIR/config.json") || exit 1
 sed -i '' "12s/$hyp/$hy2_port/g" $WORKDIR/config.json
 sed -i '' "33s/$hyp/$hy2_port/g" $WORKDIR/config.json
 sed -i '' "54s/$hyp/$hy2_port/g" $WORKDIR/config.json
@@ -778,7 +806,7 @@ rm -f -- boot.log
 if [ -e "$(basename "${FILE_MAP[bot]}")" ]; then
    echo "$(basename "${FILE_MAP[bot]}")" > ag.txt
    agg=$(cat ag.txt)
-    if [[ $ARGO_AUTH =~ ^[A-Z0-9a-z=]{120,250}$ ]]; then
+    if sbyg_serv00_argo_fixed "$WORKDIR/ARGO_AUTH.log"; then
       argo_args=(tunnel --no-autoupdate run)
     else
      #args="tunnel --edge-ip-version auto --no-autoupdate --protocol http2 --logfile boot.log --loglevel info --url http://localhost:$vmess_port"
@@ -797,7 +825,7 @@ else
 fi
 else
    agg=$(cat ag.txt)
-    if [[ $ARGO_AUTH =~ ^[A-Z0-9a-z=]{120,250}$ ]]; then
+    if sbyg_serv00_argo_fixed "$WORKDIR/ARGO_AUTH.log"; then
       argo_args=(tunnel --no-autoupdate run)
     else
      #args="tunnel --edge-ip-version auto --no-autoupdate --protocol http2 --logfile boot.log --loglevel info --url http://localhost:$vmess_port"
@@ -1391,9 +1419,9 @@ sbyg_serv00_install_asset index.html "$FILE_PATH/index.html" 600 || exit 1
 V2rayN_LINK="https://${USERNAME}.serv00.net/${UUID}_v2sub.txt"
 Clashmeta_LINK="https://${USERNAME}.serv00.net/${UUID}_clashmeta.txt"
 Singbox_LINK="https://${USERNAME}.serv00.net/${UUID}_singbox.txt"
-hyp=$(jq -r '.inbounds[0].listen_port' config.json)
-vlp=$(jq -r '.inbounds[3].listen_port' config.json)
-vmp=$(jq -r '.inbounds[4].listen_port' config.json)
+hyp=$(sbyg_serv00_port_from_config hy2-sb config.json) || exit 1
+vlp=$(sbyg_serv00_port_from_config vless-sb config.json) || exit 1
+vmp=$(sbyg_serv00_port_from_config vmess-sb config.json) || exit 1
 showuuid=$(jq -r '.inbounds[0].users[0].password' config.json)
 cat > list.txt <<EOF
 =================================================================================================

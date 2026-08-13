@@ -24,3 +24,19 @@ passed explicitly, and restores the configuration before it exits.
 For a longer observation, install `monitor-health.sh` with the accompanying
 systemd service and timer units.  It records service state, `sing-box check`,
 disk use, and post-install service errors without changing the configuration.
+
+## A3 Ubuntu 24.04 验收
+
+`a3-acceptance.sh` 是 fail-closed 的 VPS 验收辅助脚本。它只处理明确的
+`/etc/s-box` 配置和 systemd 服务路径，不清理用户目录、不刷新防火墙、不改 SSH。
+
+```bash
+bash tests/vps/a3-acceptance.sh baseline /tmp/sbyg-a3/baseline.redacted
+bash tests/vps/a3-acceptance.sh check /tmp/sbyg-a3/check.redacted
+bash tests/vps/a3-acceptance.sh backup /tmp/sbyg-a3/backup-current
+bash tests/vps/a3-acceptance.sh rollback /tmp/sbyg-a3/backup-current
+```
+
+故障注入必须先使用 `backup` 在 `/tmp/sbyg-a3/<backup>` 保存配置和 unit，再使用明确的
+`rollback` 目录恢复。恢复前会校验 `SHA256SUMS`（如存在）并恢复备份中已有的相关 unit；
+备份目录必须是新的、明确的子目录，不能把未验证的路径传给恢复命令。

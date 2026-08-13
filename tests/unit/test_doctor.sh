@@ -2,6 +2,10 @@
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+test -x "$repo_root/scripts/sb-doctor.sh" || {
+  echo 'sb-doctor.sh is not executable' >&2
+  exit 1
+}
 tmpdir=$(mktemp -d)
 trap 'rm -rf "$tmpdir"' EXIT
 mkdir -p "$tmpdir/bin" "$tmpdir/state"

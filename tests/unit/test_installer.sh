@@ -124,6 +124,20 @@ fi
 after=$(find "$prefix" -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum)
 test "$before" = "$after"
 
+assert_prefix_rejected() {
+  local candidate=$1
+  if run_installer --prefix "$candidate" --dry-run >/dev/null 2>&1; then
+    echo "installer accepted unsafe prefix: $candidate" >&2
+    exit 1
+  fi
+}
+
+for unsafe_prefix in / /etc /usr /var /tmp/../etc; do
+  assert_prefix_rejected "$unsafe_prefix"
+done
+
+run_installer --prefix "$tmpdir/install/" --dry-run >/dev/null
+
 unsupported="$tmpdir/unsupported"
 if SBYG_TEST_ARCH=mips64 run_installer --prefix "$unsupported"; then
   echo 'installer accepted an unsupported architecture' >&2

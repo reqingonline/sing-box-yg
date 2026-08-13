@@ -43,11 +43,21 @@ if grep -Eq '"private_key":[[:space:]]*"[A-Za-z0-9+/]{43}="' "$repo_root/serv00k
   echo 'Serv00 script embeds a reusable private key' >&2
   exit 1
 fi
+if grep -REq '"private_key"[[:space:]]*:[[:space:]]*"[A-Za-z0-9+/]{43}="|^[[:space:]]*pvk=[A-Za-z0-9+/]{43}=' \
+  "$repo_root/sb.sh" "$repo_root/serv00.sh" "$repo_root/serv00keep.sh"; then
+  echo 'repository embeds a reusable WireGuard private key' >&2
+  exit 1
+fi
+grep -F 'SBYG_WARP_PRIVATE_KEY' "$repo_root/sb.sh"
+grep -F 'SBYG_WARP_PRIVATE_KEY' "$repo_root/serv00.sh"
 grep -F 'SBYG_WARP_PRIVATE_KEY' "$repo_root/serv00keep.sh"
 grep -F 'if [[ "$warp_enabled" == 1 ]]' "$repo_root/serv00keep.sh"
 grep -F 'sbyg_serv00_verify_dependency' "$repo_root/serv00.sh"
 grep -F 'sbyg_serv00_verify_dependency' "$repo_root/serv00keep.sh"
 grep -F 'serv00-assets.sha256' "$repo_root/kp.sh"
+grep -F 'serv00keep.sh app.js package.json index.html' "$repo_root/kp.sh"
+grep -F 'app.js package.json index.html' "$repo_root/serv00.sh"
+grep -F 'package.json' "$repo_root/serv00keep.sh"
 grep -F 'lib/cleanup.sh lib/secrets.sh' "$repo_root/kp.sh"
 grep -F 'fd9578820fcc96fe478e14a02750bd1aec331fa8446d3c58608cbf2a0c0f081c  sb' \
   "$repo_root/serv00-assets.sha256"

@@ -85,8 +85,11 @@ fi
 hostname=$(hostname)
 
 dependency_marker=/etc/s-box/.sbyg-dependencies
+dependency_install_status=0
 if [ ! -f "$dependency_marker" ]; then
 green "首次安装Sing-box-yg脚本必要的依赖……"
+if (
+set -e
 if command -v apk >/dev/null 2>&1; then
 apk update
 apk add bash libc6-compat jq openssl procps busybox-extras iproute2 iputils coreutils expect git socat iptables grep tar tzdata util-linux wget xxd python3 qrencode
@@ -102,13 +105,15 @@ cd
 fi
 if [ -x "$(command -v apt-get)" ]; then
 apt update -y
-apt install jq cron socat busybox iptables-persistent coreutils util-linux -y
+apt install jq cron socat busybox coreutils util-linux -y
 elif [ -x "$(command -v yum)" ]; then
-yum update -y && yum install epel-release -y
+yum install epel-release -y
 yum install jq socat busybox coreutils util-linux -y
 elif [ -x "$(command -v dnf)" ]; then
-dnf update -y
 dnf install jq socat busybox coreutils util-linux -y
+else
+red '鏈壘鍒版敮鎸佺殑鍖呯鐞嗗櫒'
+exit 1
 fi
 if [ -x "$(command -v yum)" ] || [ -x "$(command -v dnf)" ]; then
 if [ -x "$(command -v yum)" ]; then
@@ -145,12 +150,21 @@ elif [ -x "$(command -v dnf)" ]; then
 dnf install -y "$inspackage"
 elif [ -x "$(command -v apk)" ]; then
 apk add "$inspackage"
+else
+exit 1
 fi
 fi
 done
 fi
+); then
+:
+else
+dependency_install_status=$?
+red 'dependency installation failed; dependency marker was not written'
+exit "$dependency_install_status"
+fi
 mkdir -p /etc/s-box
-touch "$dependency_marker"
+touch "$dependency_marker" || { red 'dependency marker write failed'; exit 1; }
 fi
 
 if [[ $vi = openvz ]]; then
@@ -3544,9 +3558,27 @@ result
 }
 output=$(warpcode)
 if ! echo "$output" 2>/dev/null | grep -w "private_key" > /dev/null; then
-v6=2606:4700:110:860e:738f:b37:f15:d38d
-pvk=g9I2sgUH6OCbIBTehkEfVEnuvInHYZvPOFhWchMLSc4=
-res=[33,217,129]
+if [[ "$SBYG_WARP_PRIVATE_KEY" =~ ^[A-Za-z0-9+/]{43}=$ &&
+      "$SBYG_WARP_IPV6" =~ ^[0-9A-Fa-f:]+$ &&
+      "$SBYG_WARP_RESERVED" =~ ^[0-9]+,[0-9]+,[0-9]+$ ]]; then
+pvk=$SBYG_WARP_PRIVATE_KEY
+v6=$SBYG_WARP_IPV6
+IFS=',' read -r warp_reserved_1 warp_reserved_2 warp_reserved_3 warp_reserved_extra <<< "$SBYG_WARP_RESERVED"
+for warp_reserved_value in "$warp_reserved_1" "$warp_reserved_2" "$warp_reserved_3"; do
+if [[ ! "$warp_reserved_value" =~ ^[0-9]{1,3}$ ]] || ((10#$warp_reserved_value > 255)); then
+red 'WARP reserved 必须是三个 0-255 的十进制整数'
+return 1
+fi
+done
+if [ -n "$warp_reserved_extra" ]; then
+red 'WARP reserved 必须恰好包含三个数字'
+return 1
+fi
+res=[$((10#$warp_reserved_1)),$((10#$warp_reserved_2)),$((10#$warp_reserved_3))]
+else
+red 'WARP 璐︽埛娉ㄥ唽澶辫触锛屾湭閰嶇疆鐢ㄦ埛鑷湁鍑嵁锛岀煭缁濅娇鐢ㄥ叡浜閽?'
+return 1
+fi
 else
 pvk=$(echo "$output" | sed -n 4p | awk '{print $2}' | tr -d ' "' | sed 's/.$//')
 v6=$(echo "$output" | sed -n 7p | awk '{print $2}' | tr -d ' "')

@@ -119,6 +119,8 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=read-only
 ProtectSystem=strict
+StateDirectory=sing-box-yg
+StateDirectoryMode=0700
 ReadWritePaths=/etc/s-box /var/lib/sing-box-yg /run
 EOF
   cat > "$timer_tmp" <<EOF
