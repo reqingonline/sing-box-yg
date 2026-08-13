@@ -23,7 +23,7 @@ return 0
 done
 return 1
 }
-for sbyg_library in source download secrets transaction firewall subscription service config; do
+for sbyg_library in source download secrets transaction firewall subscription service config core_release; do
 sbyg_load_library "$sbyg_library" || true
 done
 declare -F sbyg_secure_defaults >/dev/null 2>&1 && sbyg_secure_defaults /etc/s-box
@@ -414,7 +414,9 @@ yellow "1：使用目前最新正式版内核 (回车默认)"
 yellow "2：使用之前1.10.7正式版内核 (支持geosite分流、IP优选级切换，无Anytls协议)"
 readp "请选择【1-2】：" menu
 if [ -z "$menu" ] || [ "$menu" = "1" ] ; then
-sbcore=$(curl -Ls https://github.com/SagerNet/sing-box/releases/latest | grep -oP 'tag/v\K[0-9.]+' | head -n 1)
+lapre
+sbcore=$latcore
+[[ -n "$sbcore" ]] || { red "无法从 sing-box 官方 Releases API 解析稳定版本"; exit 1; }
 else
 sbcore='1.10.7'
 fi
@@ -1075,7 +1077,7 @@ rc-update add sing-box default
 rc-service sing-box start
 else
 sbyg_service_render_systemd /etc/systemd/system/sing-box.service /etc/s-box/sing-box /etc/s-box/sb.json /etc/s-box || return 1
-sbyg_service_render_health_timer /etc/systemd/system/sing-box-yg-health.service /etc/systemd/system/sing-box-yg-health.timer /usr/local/lib/sing-box-yg/sb-doctor.sh || return 1
+sbyg_service_render_health_timer /etc/systemd/system/sing-box-yg-health.service /etc/systemd/system/sing-box-yg-health.timer "${SBYG_INSTALL_ROOT:-/usr/local/lib/sing-box-yg}/scripts/sb-doctor.sh" || return 1
 systemctl daemon-reload
 systemctl enable sing-box >/dev/null 2>&1
 systemctl enable --now sing-box-yg-health.timer >/dev/null 2>&1
@@ -4072,13 +4074,13 @@ fi
 cronsb(){
 uncronsb
 if ! command -v apk >/dev/null 2>&1; then
-sbyg_service_render_health_timer /etc/systemd/system/sing-box-yg-health.service /etc/systemd/system/sing-box-yg-health.timer /usr/local/lib/sing-box-yg/sb-doctor.sh || return 1
+sbyg_service_render_health_timer /etc/systemd/system/sing-box-yg-health.service /etc/systemd/system/sing-box-yg-health.timer "${SBYG_INSTALL_ROOT:-/usr/local/lib/sing-box-yg}/scripts/sb-doctor.sh" || return 1
 systemctl daemon-reload
 systemctl enable --now sing-box-yg-health.timer
 return
 fi
 crontab -l 2>/dev/null > /tmp/crontab.tmp
-echo "*/15 * * * * /usr/local/lib/sing-box-yg/sb-doctor.sh --repair >/dev/null 2>&1" >> /tmp/crontab.tmp
+echo "*/15 * * * * ${SBYG_INSTALL_ROOT:-/usr/local/lib/sing-box-yg}/scripts/sb-doctor.sh --repair >/dev/null 2>&1" >> /tmp/crontab.tmp
 crontab /tmp/crontab.tmp >/dev/null 2>&1
 rm /tmp/crontab.tmp
 }
@@ -4114,14 +4116,13 @@ green "Sing-box-yg安装脚本升级成功" && sleep 5 && sb
 }
 
 lapre(){
-json=$(curl -Ls --max-time 3 https://data.jsdelivr.com/v1/package/gh/SagerNet/sing-box)
-if echo "$json"|grep -q '"versions"'; then
-latcore=$(echo "$json"|grep -Eo '"[0-9.]+",'|head -n1|tr -d '",')
-precore=$(echo "$json"|grep -Eo '"[0-9.]*-[^"]*"'|head -n1|tr -d '",')
-else
-page=$(curl -Ls --max-time 3 https://github.com/SagerNet/sing-box/releases)
-latcore=$(echo "$page"|grep -oE 'tag/v[0-9.]+'|head -n1|cut -d'v' -f2)
-precore=$(echo "$page"|grep -oE '/tag/v[0-9.]+-[^"]+'|head -n1|cut -d'v' -f2)
+latcore=
+precore=
+if declare -F sbyg_sing_box_release_channels >/dev/null 2>&1; then
+local channels
+channels=$(sbyg_sing_box_release_channels 2>/dev/null || true)
+latcore=$(printf '%s\n' "$channels" | sed -n 's/^stable=//p')
+precore=$(printf '%s\n' "$channels" | sed -n 's/^prerelease=//p')
 fi
 inscore=$(/etc/s-box/sing-box version 2>/dev/null | awk '/version/{print $NF}')
 }
@@ -4136,9 +4137,9 @@ green "3：切换Sing-box某个正式版或测试版，需指定版本号 (建�
 green "0：返回上层"
 readp "请选择【0-3】：" menu
 if [ "$menu" = "1" ]; then
-upcore=$(curl -Ls https://github.com/SagerNet/sing-box/releases/latest | grep -oP 'tag/v\K[0-9.]+' | head -n 1)
+upcore=$latcore
 elif [ "$menu" = "2" ]; then
-upcore=$(curl -Ls https://github.com/SagerNet/sing-box/releases | grep -oP '/tag/v\K[0-9.]+-[^"]+' | head -n 1)
+upcore=$precore
 elif [ "$menu" = "3" ]; then
 echo
 red "注意: 版本号在 https://github.com/SagerNet/sing-box/tags 可查，且有Downloads字样 (必须1.10系或者1.30系以上版本)"

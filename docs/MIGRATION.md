@@ -33,4 +33,21 @@ sudo /usr/local/lib/sing-box-yg/scripts/install.sh --channel stable --upgrade
 sudo /usr/local/lib/sing-box-yg/scripts/install.sh --version vX.Y.Z --upgrade
 ```
 
+## sing-box 核心版本选择
+
+`sb` 菜单的默认稳定版和测试版列表来自 sing-box 官方 Releases API：draft 和
+prerelease 不会进入稳定版选择，下载资产仍按官方 API 返回的 SHA-256 digest
+校验。升级前应记录 `sing-box version` 和 `sb-doctor.sh` 输出，升级后重新运行：
+
+```bash
+sudo /etc/s-box/sing-box check -c /etc/s-box/sb.json
+sudo systemctl start sing-box-yg-health.service
+sudo systemctl show -p Result --value sing-box-yg-health.service
+sudo /usr/local/lib/sing-box-yg/scripts/sb-doctor.sh --repair
+```
+
+健康 unit 使用发布包中的 `/usr/local/lib/sing-box-yg/scripts/sb-doctor.sh`。如果旧
+安装的 unit 仍指向根目录 `sb-doctor.sh`，请先按固定 Release 重新安装脚本包，再执行
+上面的 health 检查；不要手动复制未经校验的远程脚本。
+
 核心/配置更新在锁内完成，候选配置必须通过 `sing-box check`、服务状态和监听检查；失败时恢复上一个配置和核心。若需人工恢复卸载备份，把对应时间目录中的 `/etc/s-box` 恢复后再次校验，不要覆盖其他系统目录。

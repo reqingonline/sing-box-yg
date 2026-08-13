@@ -33,6 +33,11 @@ grep ' sing-box-yg-vX.Y.Z.tar.gz$' SHA256SUMS | sha256sum -c -
 tar -tzf sing-box-yg-vX.Y.Z.tar.gz >/dev/null
 ```
 
+核心维护发布还必须在 A4 VPS 报告中记录 sing-box 官方 Releases API 的稳定版
+tag、目标架构资产和 SHA-256 digest；不要依赖 GitHub HTML 或 jsDelivr 的 latest
+正则。报告要区分“服务端监听/配置通过”和“真实客户端握手通过”，没有实际客户端
+路径时只能发布前者并明确未验证项。
+
 不要上传生成的节点配置、订阅、token、测试 VPS 原始日志或包含真实地址的诊断文件。`main` 是开发通道，必须显式选择，不作为生产安装来源。
 
 更新 Serv00 的 `sb` 或 `server` 依赖时，必须在隔离主机完整下载资产、核对来源并更新 `serv00-assets.sha256`，随后运行安全预检。不得因为上游 Release 的 `digest` 为空而跳过校验。
