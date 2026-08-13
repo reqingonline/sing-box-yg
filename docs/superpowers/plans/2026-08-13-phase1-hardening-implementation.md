@@ -41,9 +41,9 @@ esac
 
 ### Task 2: 依赖安装失败安全与 UFW 兼容
 
-**Files:** sb.sh lines 87-154; tests/unit/test_dependency_marker.sh; tests/unit/test_firewall_chain.sh.
+**Files:** sb.sh lines 87-154; tests/test_dependency_marker.sh; tests/test_firewall_chain.sh.
 
-- [ ] Step 1: 在 dependency marker 测试中增加静态断言：sb.sh 不得出现 iptables-persistent、yum update 或 dnf update；必须出现 dependency_install_status 和 dependency marker was not written。
+- [ ] Step 1: 在 tests/test_dependency_marker.sh 中增加静态断言：sb.sh 不得出现 iptables-persistent、yum update 或 dnf update；必须出现 dependency_install_status 和 dependency marker was not written。
 - [ ] Step 2: 将 sb.sh 首次依赖代码封装成 sbyg_install_dependencies。apt 分支只安装 jq、cron、socat、busybox、coreutils、util-linux，不安装 iptables-persistent；yum/dnf 分支只安装脚本依赖，不执行 update -y；apk、apt、yum、dnf 和逐包补装都在失败时 return 1。
 - [ ] Step 3: 用下面的尾部控制 marker 写入，替代当前无条件 touch：
 
@@ -64,7 +64,7 @@ if [ ! -f "$dependency_marker" ]; then
 fi
 ~~~
 
-- [ ] Step 4: 增加隔离 fake apt-get failure-injection 测试；update 返回 1 时断言非零退出且临时 marker 不存在。若入口必须 root，明确输出 SKIP，不伪报通过。
+- [ ] Step 4: 在 tests/test_dependency_marker.sh 增加隔离 fake apt-get failure-injection 测试；update 返回 1 时断言非零退出且临时 marker 不存在。若入口必须 root，明确输出 SKIP，不伪报通过。
 - [ ] Step 5: 运行两个 focused tests，确认静态危险命令无命中，然后提交 fix: fail closed during dependency bootstrap。
 
 ### Task 3: health service 状态目录
@@ -107,7 +107,7 @@ StateDirectoryMode=0700
 
 **Files:** all tracked files for verification; no additional implementation files.
 
-- [ ] Step 1: 依次运行 tests/unit/test_installer.sh、test_dependency_marker.sh、test_service_definition.sh、test_doctor.sh、test_owned_updates.sh，并对 git ls-files '*.sh' 全部执行 bash -n。
+- [ ] Step 1: 依次运行 tests/unit/test_installer.sh、tests/test_dependency_marker.sh、tests/unit/test_service_definition.sh、tests/unit/test_doctor.sh、tests/unit/test_owned_updates.sh，并对 git ls-files '*.sh' 全部执行 bash -n。
 - [ ] Step 2: 运行 bash tests/run.sh，记录通过、失败和环境 skip；缺少 jq 等环境问题不得伪报通过。
 - [ ] Step 3: 运行 git diff --check、git status --short，并用 git grep 搜索已知两个固定私钥字符串，预期无输出。
 - [ ] Step 4: 审查 git diff origin/main...HEAD --stat、git log origin/main..HEAD 和 git diff origin/main...HEAD --check，确认无 A2、release tag 或生产 VPS 变更。
