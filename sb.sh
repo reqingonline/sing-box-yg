@@ -85,8 +85,11 @@ fi
 hostname=$(hostname)
 
 dependency_marker=/etc/s-box/.sbyg-dependencies
+dependency_install_status=0
 if [ ! -f "$dependency_marker" ]; then
 green "首次安装Sing-box-yg脚本必要的依赖……"
+if (
+set -e
 if command -v apk >/dev/null 2>&1; then
 apk update
 apk add bash libc6-compat jq openssl procps busybox-extras iproute2 iputils coreutils expect git socat iptables grep tar tzdata util-linux wget xxd python3 qrencode
@@ -102,13 +105,15 @@ cd
 fi
 if [ -x "$(command -v apt-get)" ]; then
 apt update -y
-apt install jq cron socat busybox iptables-persistent coreutils util-linux -y
+apt install jq cron socat busybox coreutils util-linux -y
 elif [ -x "$(command -v yum)" ]; then
-yum update -y && yum install epel-release -y
+yum install epel-release -y
 yum install jq socat busybox coreutils util-linux -y
 elif [ -x "$(command -v dnf)" ]; then
-dnf update -y
 dnf install jq socat busybox coreutils util-linux -y
+else
+red '鏈壘鍒版敮鎸佺殑鍖呯鐞嗗櫒'
+exit 1
 fi
 if [ -x "$(command -v yum)" ] || [ -x "$(command -v dnf)" ]; then
 if [ -x "$(command -v yum)" ]; then
@@ -145,12 +150,21 @@ elif [ -x "$(command -v dnf)" ]; then
 dnf install -y "$inspackage"
 elif [ -x "$(command -v apk)" ]; then
 apk add "$inspackage"
+else
+exit 1
 fi
 fi
 done
 fi
+); then
+:
+else
+dependency_install_status=$?
+red 'dependency installation failed; dependency marker was not written'
+exit "$dependency_install_status"
+fi
 mkdir -p /etc/s-box
-touch "$dependency_marker"
+touch "$dependency_marker" || { red 'dependency marker write failed'; exit 1; }
 fi
 
 if [[ $vi = openvz ]]; then
