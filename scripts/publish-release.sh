@@ -181,7 +181,23 @@ fi
 if [ -n "$release_id" ]; then
   test "$release_draft" = true
   if [ -n "$existing_commit" ]; then
-    test "$existing_commit" = "$release_sha"
+    if [ "$existing_commit" != "$release_sha" ]; then
+      # A failed earlier run may have left our draft/tag on the previous
+      # main commit. Retarget only that draft when the old tag is exactly the
+      # draft target and the new release commit is a fast-forward descendant.
+      test "$release_target" = "$existing_commit"
+      git merge-base --is-ancestor "$existing_commit" "$release_sha"
+      echo "Retargeting draft Release $release_tag from $existing_commit to $release_sha"
+      jq -n --arg sha "$release_sha" '{sha:$sha,force:false}' > "$workdir/retarget-ref.json"
+      api_call "$workdir/retargeted-ref.json" 200 --request PATCH \
+        --header 'Content-Type: application/json' --data-binary "@$workdir/retarget-ref.json" \
+        "$api_url/repos/$GITHUB_REPOSITORY/git/refs/tags/$release_tag"
+      jq -n --arg sha "$release_sha" '{target_commitish:$sha}' > "$workdir/retarget.json"
+      api_call "$workdir/retargeted.json" 200 --request PATCH \
+        --header 'Content-Type: application/json' --data-binary "@$workdir/retarget.json" \
+        "$api_url/repos/$GITHUB_REPOSITORY/releases/$release_id"
+      existing_commit=$(resolve_tag_commit)
+    fi
   elif [ "$release_target" != "$release_sha" ]; then
     jq -n --arg sha "$release_sha" '{target_commitish:$sha}' > "$workdir/retarget.json"
     api_call "$workdir/retargeted.json" 200 --request PATCH \
