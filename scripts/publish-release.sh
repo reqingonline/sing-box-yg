@@ -257,6 +257,17 @@ api_call "$workdir/published.json" 200 --request PATCH \
   --header 'Content-Type: application/json' --data-binary "@$workdir/publish.json" \
   "$api_url/repos/$GITHUB_REPOSITORY/releases/$release_id"
 test "$(jq -r '.draft' "$workdir/published.json")" = false
+published_tag=$(jq -r '.tag_name' "$workdir/published.json")
+if [ "$published_tag" != "$release_tag" ]; then
+  # GitHub can retain an untagged name when publishing a draft created before
+  # its tag ref existed. Repair the published release association explicitly.
+  jq -n --arg tag "$release_tag" --arg sha "$release_sha" \
+    '{tag_name:$tag,target_commitish:$sha}' > "$workdir/retag-published.json"
+  api_call "$workdir/retagged-published.json" 200 --request PATCH \
+    --header 'Content-Type: application/json' --data-binary "@$workdir/retag-published.json" \
+    "$api_url/repos/$GITHUB_REPOSITORY/releases/$release_id"
+  test "$(jq -r '.tag_name' "$workdir/retagged-published.json")" = "$release_tag"
+fi
 existing_commit=$(resolve_tag_commit)
 test "$existing_commit" = "$release_sha"
-jq -r '.html_url' "$workdir/published.json"
+jq -r '.html_url' "$workdir/retagged-published.json" 2>/dev/null || jq -r '.html_url' "$workdir/published.json"
