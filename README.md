@@ -16,6 +16,12 @@ sudo bash "sing-box-yg-${tag}/scripts/install.sh" --version "$tag"
 sudo sb
 ```
 
+### A4 核心维护与健康检查
+
+- `sb` 菜单的稳定版/测试版列表改为读取 sing-box 官方 Releases API，排除 draft 和 prerelease；核心资产继续按官方 SHA-256 digest 校验，默认稳定版不会被页面正则或 jsDelivr 顺序误导。
+- systemd 健康检查固定调用发布包内的 `scripts/sb-doctor.sh`，安装后可用 `sudo systemctl start sing-box-yg-health.service` 和 `sudo systemctl show -p Result --value sing-box-yg-health.service` 验证。
+- 核心升级会先保留事务快照，执行 `sing-box check`、服务/监听和 doctor 检查；失败时恢复旧核心与配置。详细步骤见 [`docs/MIGRATION.md`](docs/MIGRATION.md) 和 [`tests/vps/a4-core-upgrade-report.md`](tests/vps/a4-core-upgrade-report.md)。
+
 安装器会再次下载并校验发布包，然后原子替换项目目录。稳定版升级使用 `sb` 菜单 7；固定版本回滚使用同一安装器的 `--version vX.Y.Z`。运行诊断：
 
 ```bash

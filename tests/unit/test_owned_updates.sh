@@ -74,7 +74,7 @@ if grep -E 'ps aux|child_process.*exec|\bexec\(' "$repo_root/app.js"; then
 fi
 grep -F 'route.length !== 2 || !tokenMatches(route[1])' "$repo_root/app.js"
 grep -F 'server.listen(listenPort, "127.0.0.1"' "$repo_root/app.js"
-test "$(cat "$repo_root/RELEASE_VERSION")" = 'v1.0.0'
+test "$(cat "$repo_root/RELEASE_VERSION")" = 'v1.0.1'
 grep -F 'branches:' "$repo_root/.github/workflows/release.yml"
 grep -F 'RELEASE_VERSION' "$repo_root/.github/workflows/release.yml"
 grep -F '.github/workflows/release.yml' "$repo_root/.github/workflows/release.yml"
