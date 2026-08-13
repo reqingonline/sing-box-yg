@@ -65,18 +65,39 @@ resolve_tag_commit() {
 }
 
 ensure_tag_ref() {
-  local expected_commit=$1 current_commit
-  if current_commit=$(resolve_tag_commit); then
-    test "$current_commit" = "$expected_commit"
-    return 0
-  fi
+  local expected_commit=$1 current_commit attempt
+  # A release/tag lookup can briefly lag GitHub's ref store. Poll before
+  # creating the ref, and re-check after a 422 race instead of failing a
+  # publish that is already converging on the expected commit.
+  for attempt in 1 2 3 4 5; do
+    if current_commit=$(resolve_tag_commit); then
+      [ "$current_commit" = "$expected_commit" ]
+      return $?
+    fi
+    [ "$attempt" -lt 5 ] && sleep 1
+  done
   jq -n --arg ref "refs/tags/$release_tag" --arg sha "$expected_commit" \
     '{ref:$ref,sha:$sha}' > "$workdir/create-ref.json"
-  api_call "$workdir/created-ref.json" 201 --request POST \
+  if ! api_call "$workdir/created-ref.json" 201 --request POST \
     --header 'Content-Type: application/json' --data-binary "@$workdir/create-ref.json" \
-    "$api_url/repos/$GITHUB_REPOSITORY/git/refs"
-  current_commit=$(resolve_tag_commit)
-  test "$current_commit" = "$expected_commit"
+    "$api_url/repos/$GITHUB_REPOSITORY/git/refs"; then
+    for attempt in 1 2 3 4 5; do
+      if current_commit=$(resolve_tag_commit); then
+        [ "$current_commit" = "$expected_commit" ]
+        return $?
+      fi
+      [ "$attempt" -lt 5 ] && sleep 1
+    done
+    return 1
+  fi
+  for attempt in 1 2 3 4 5; do
+    if current_commit=$(resolve_tag_commit); then
+      [ "$current_commit" = "$expected_commit" ]
+      return $?
+    fi
+    [ "$attempt" -lt 5 ] && sleep 1
+  done
+  return 1
 }
 
 api_call "$workdir/releases.json" 200 \
@@ -184,6 +205,9 @@ if [ -n "$release_id" ]; then
     '.[] | select(.tag_name == $tag) | .assets[] | select(.name == $archive or .name == $sums) | .id' \
     "$workdir/releases.json")
 else
+  # Create the tag first. GitHub may otherwise race the draft Release's
+  # implicit tag creation, leaving a draft with no publishable assets.
+  ensure_tag_ref "$release_sha"
   echo "Creating draft Release $release_tag at $release_sha"
   jq -n --arg tag "$release_tag" --arg sha "$release_sha" \
     '{tag_name:$tag,target_commitish:$sha,name:$tag,draft:true,prerelease:false,generate_release_notes:true}' \
