@@ -16,7 +16,6 @@ cleanup() {
 trap cleanup EXIT
 
 mkdir -p "$workdir"
-node_home=$(cygpath -w "$fake_home")
 printf '%s\n' 'test-access-token-1234' > "$workdir/UUID.txt"
 printf '%s\n' 'subscription-secret' > "$workdir/list.txt"
 cat > "$fake_home/serv00keep.sh" <<'EOF'
@@ -29,8 +28,14 @@ printf 'ports\n' >> "$HOME/port-runs"
 EOF
 chmod 700 "$fake_home/serv00keep.sh" "$fake_home/webport.sh"
 
-HOME="$fake_home" USERPROFILE="$node_home" SBYG_SERV00_USER=tester SBYG_APP_PORT=0 SBYG_DISABLE_AUTO_KEEP=1 \
-  node "$repo_root/app.js" > "$tmpdir/app.log" 2>&1 &
+if command -v cygpath >/dev/null 2>&1; then
+  node_home=$(cygpath -w "$fake_home")
+  HOME="$fake_home" USERPROFILE="$node_home" SBYG_SERV00_USER=tester SBYG_APP_PORT=0 SBYG_DISABLE_AUTO_KEEP=1 \
+    node "$repo_root/app.js" > "$tmpdir/app.log" 2>&1 &
+else
+  HOME="$fake_home" SBYG_SERV00_USER=tester SBYG_APP_PORT=0 SBYG_DISABLE_AUTO_KEEP=1 \
+    node "$repo_root/app.js" > "$tmpdir/app.log" 2>&1 &
+fi
 server_pid=$!
 
 port=
