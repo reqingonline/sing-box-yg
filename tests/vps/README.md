@@ -33,7 +33,10 @@ disk use, and post-install service errors without changing the configuration.
 ```bash
 bash tests/vps/a3-acceptance.sh baseline /tmp/sbyg-a3/baseline.redacted
 bash tests/vps/a3-acceptance.sh check /tmp/sbyg-a3/check.redacted
+bash tests/vps/a3-acceptance.sh backup /tmp/sbyg-a3/backup-current
+bash tests/vps/a3-acceptance.sh rollback /tmp/sbyg-a3/backup-current
 ```
 
-故障注入必须先在 `/tmp/sbyg-a3/<backup>` 保存配置和 unit，再使用明确的
-`rollback` 目录恢复；不能把未验证的路径传给恢复命令。
+故障注入必须先使用 `backup` 在 `/tmp/sbyg-a3/<backup>` 保存配置和 unit，再使用明确的
+`rollback` 目录恢复。恢复前会校验 `SHA256SUMS`（如存在）并恢复备份中已有的相关 unit；
+备份目录必须是新的、明确的子目录，不能把未验证的路径传给恢复命令。

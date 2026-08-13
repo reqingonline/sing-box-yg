@@ -5,6 +5,7 @@ usage() {
   cat <<'EOF'
 Usage: a3-acceptance.sh baseline [output]
        a3-acceptance.sh check [output]
+       a3-acceptance.sh backup [backup-dir]
        a3-acceptance.sh rollback [backup-dir]
 
 This helper is intentionally fail-closed.  It never deletes project data,
@@ -25,6 +26,40 @@ state_dir=/tmp/sbyg-a3
 
 private_hash() {
   [ -f "$1" ] && sha256sum "$1" | awk '{print $1}' || printf 'absent\n'
+}
+
+backup_host() {
+  local output=${1:-$state_dir/backup-$(date -u +%Y%m%dT%H%M%SZ)}
+  case "$output" in
+    "$state_dir"/*) ;;
+    *) die 'backup must be an explicit child of /tmp/sbyg-a3' ;;
+  esac
+  [ "$output" != "$state_dir" ] || die 'backup path must not be the state directory itself'
+  [ ! -e "$output" ] || die "backup path already exists: $output"
+  [ -f "$config" ] || die "missing configuration: $config"
+
+  mkdir -p "$output"
+  chmod 700 "$output"
+  install -m 600 "$config" "$output/sb.json"
+
+  # Capture only the files that A3 may need to restore; do not copy the whole
+  # /etc/s-box tree or any unrelated system directories.
+  for source in \
+    /etc/systemd/system/sing-box.service \
+    /etc/systemd/system/sing-box-yg-health.service \
+    /etc/systemd/system/sing-box-yg-health.timer \
+    /usr/local/lib/sing-box-yg/release-ref; do
+    if [ -f "$source" ]; then
+      install -m 600 "$source" "$output/$(basename "$source")"
+    fi
+  done
+
+  (
+    cd "$output"
+    sha256sum -- * > SHA256SUMS
+  )
+  chmod 600 "$output/SHA256SUMS"
+  printf 'backup=%s\n' "$output"
 }
 
 write_baseline() {
@@ -82,9 +117,18 @@ rollback_backup() {
   esac
   [ -d "$backup" ] || die "backup directory not found: $backup"
   [ -f "$backup/sb.json" ] || die 'backup is missing sb.json'
+  if [ -f "$backup/SHA256SUMS" ]; then
+    (cd "$backup" && sha256sum -c SHA256SUMS >/dev/null) || die 'backup manifest verification failed'
+  fi
   install -m 600 "$backup/sb.json" "$config"
-  if [ -f "$backup/sing-box.service" ]; then
-    install -m 644 "$backup/sing-box.service" /etc/systemd/system/sing-box.service
+  reloaded=0
+  for unit_file in sing-box.service sing-box-yg-health.service sing-box-yg-health.timer; do
+    if [ -f "$backup/$unit_file" ]; then
+      install -m 644 "$backup/$unit_file" "/etc/systemd/system/$unit_file"
+      reloaded=1
+    fi
+  done
+  if [ "$reloaded" -eq 1 ]; then
     systemctl daemon-reload
   fi
   "$core" check -c "$config"
@@ -98,6 +142,7 @@ mode=${1-}
 case "$mode" in
   baseline) write_baseline "${2:-$state_dir/baseline.redacted}" ;;
   check) check_host "${2:-$state_dir/check.redacted}" ;;
+  backup) backup_host "${2:-}" ;;
   rollback) rollback_backup "${2-}" ;;
   *) usage >&2; exit 2 ;;
 esac
