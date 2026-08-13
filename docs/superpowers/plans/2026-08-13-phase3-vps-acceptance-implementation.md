@@ -97,7 +97,7 @@ Run: `bash tests/run.sh`、`bash -n tests/vps/*.sh`、`git diff --check`、`git 
 
 Expected: 本地测试无新增失败；VPS 结果与报告一致；工作树干净。
 
-- [ ] **Step 3: 推送但不合并 main**
+- [x] **Step 3: 推送但不合并 main**
 
 Run: `git push -u origin maintenance/phase3-vps-acceptance`
 
