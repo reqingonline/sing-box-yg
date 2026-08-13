@@ -41,7 +41,7 @@ esac
 
 ### Task 2: 依赖安装失败安全与 UFW 兼容
 
-**Files:** sb.sh lines 87-154; tests/test_dependency_marker.sh; tests/test_firewall_chain.sh.
+**Files:** sb.sh lines 87-154; tests/test_dependency_marker.sh; tests/unit/test_firewall_chain.sh.
 
 - [ ] Step 1: 在 tests/test_dependency_marker.sh 中增加静态断言：sb.sh 不得出现 iptables-persistent、yum update 或 dnf update；必须出现 dependency_install_status 和 dependency marker was not written。
 - [ ] Step 2: 将 sb.sh 首次依赖代码封装成 sbyg_install_dependencies。apt 分支只安装 jq、cron、socat、busybox、coreutils、util-linux，不安装 iptables-persistent；yum/dnf 分支只安装脚本依赖，不执行 update -y；apk、apt、yum、dnf 和逐包补装都在失败时 return 1。
