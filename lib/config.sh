@@ -41,9 +41,9 @@ sbyg_config_prepare() {
     1.12)
       jq '
         .dns = (.dns // {}) |
-        .dns.servers = (if (.dns.servers // [] | length) == 0 then
-          [{"type":"local","tag":"local"}]
-        else .dns.servers end) |
+        .dns.servers = ((.dns.servers // []) |
+          if any(.[]; .tag == "local") then .
+          else . + [{"type":"local","tag":"local"}] end) |
         .route = (.route // {}) |
         .route.default_domain_resolver = (.route.default_domain_resolver // "local") |
         .experimental = (.experimental // {}) |
@@ -54,12 +54,12 @@ sbyg_config_prepare() {
     1.14)
       jq '
         .dns = (.dns // {}) |
-        .dns.servers = (if (.dns.servers // [] | length) == 0 then
-          [{"type":"local","tag":"local"}]
-        else .dns.servers end) |
-        .http_clients = (if (.http_clients // [] | length) == 0 then
-          [{"tag":"direct","engine":"go"}]
-        else .http_clients end) |
+        .dns.servers = ((.dns.servers // []) |
+          if any(.[]; .tag == "local") then .
+          else . + [{"type":"local","tag":"local"}] end) |
+        .http_clients = ((.http_clients // []) |
+          if any(.[]; .tag == "direct") then .
+          else . + [{"tag":"direct","engine":"go"}] end) |
         .route = (.route // {}) |
         .route.default_domain_resolver = (.route.default_domain_resolver // "local") |
         .route.default_http_client = (.route.default_http_client // "direct") |

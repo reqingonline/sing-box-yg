@@ -123,5 +123,11 @@ Serv00 的 Gemini 分流方案不再内置任何共享 WARP 私钥。若确实�
 ### 感谢你右上角的star🌟
 [![Stargazers over time](https://starchart.cc/yonggekkk/sing-box-yg.svg)](https://starchart.cc/yonggekkk/sing-box-yg)
 
+## A2 维护说明
+
+- Serv00 保活页的 `app.js` 旁边会同步一个只声明 `type: commonjs` 的 `package.json`，避免宿主目录的 Node 模块模式改变入口行为。
+- Argo 固定隧道的 Token 只通过受保护文件注入进程环境，不再在终端回显；临时隧道按 `vmess-sb` 标签读取当前端口。
+- sing-box 1.14+ 迁移会保留已有 DNS/HTTP client，并只补齐缺失的 `local`/`direct` 引用；迁移仍以原子文件替换完成。
+
 ---------------------------------------
 #### 声明：所有代码来源于Github社区与ChatGPT的整合

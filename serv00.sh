@@ -8,7 +8,29 @@ red() { echo -e "\e[1;91m$1\033[0m"; }
 green() { echo -e "\e[1;32m$1\033[0m"; }
 yellow() { echo -e "\e[1;33m$1\033[0m"; }
 purple() { echo -e "\e[1;35m$1\033[0m"; }
-reading() { read -p "$(red "$1")" "$2"; }
+reading() { IFS= read -r -p "$(red "$1")" "$2"; }
+sbyg_serv00_read_secret() {
+  local prompt=$1 variable=$2
+  IFS= read -r -s -p "$(red "$prompt")" "$variable"
+  printf '\n'
+}
+sbyg_serv00_port_from_config() {
+  local tag=${1-} file=${2-config.json} value
+  [ -n "$tag" ] && [ -r "$file" ] || return 2
+  value=$(jq -er --arg tag "$tag" '
+    [.inbounds[]? | select(.tag == $tag) | .listen_port] |
+    if length == 1 and (.[0] |
+      if type == "number" then . >= 1 and . <= 65535 and floor == . else false end)
+    then .[0] else empty end
+  ' "$file") || return 1
+  case "$value" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  printf '%s\n' "$value"
+}
+sbyg_serv00_argo_fixed() {
+  [ -s "${1-}" ]
+}
 umask 077
 sbyg_load_library() {
   local name=$1 root script_root
@@ -55,10 +77,12 @@ sbyg_serv00_seed_legacy_assets() {
     sbyg_serv00_register_asset "$path" || return
   done
   [ -z "${keep_path:-}" ] || sbyg_serv00_register_asset "$keep_path/app.js" || return
+  [ -z "${keep_path:-}" ] || sbyg_serv00_register_asset "$keep_path/package.json" || return
   [ -z "${FILE_PATH:-}" ] || sbyg_serv00_register_asset "$FILE_PATH/index.html" || return
   [ -n "${WORKDIR:-}" ] || return 0
   for name in config.json config.yml tunnel.yml tunnel.json sb.log boot.log \
-    ARGO_AUTH.log ARGO_DOMAIN.log ip.txt list.txt sb.txt ag.txt; do
+    ARGO_AUTH.log ARGO_DOMAIN.log ARGO_AUTH_show.log ARGO_DOMAIN_show.log \
+    ip.txt list.txt sb.txt ag.txt; do
     sbyg_serv00_register_asset "$WORKDIR/$name" || return
   done
   for name in sb.txt ag.txt; do
@@ -224,9 +248,9 @@ done <<< "$portlist"
 fi
 check_port
 if [[ -e $WORKDIR/config.json ]]; then
-hyp=$(jq -r '.inbounds[0].listen_port' $WORKDIR/config.json)
-vlp=$(jq -r '.inbounds[3].listen_port' $WORKDIR/config.json)
-vmp=$(jq -r '.inbounds[4].listen_port' $WORKDIR/config.json)
+hyp=$(sbyg_serv00_port_from_config hy2-sb "$WORKDIR/config.json") || return 1
+vlp=$(sbyg_serv00_port_from_config vless-sb "$WORKDIR/config.json") || return 1
+vmp=$(sbyg_serv00_port_from_config vmess-sb "$WORKDIR/config.json") || return 1
 purple "检测到Serv00/Hostuno-sb-yg脚本已安装，执行端口替换，请稍等……"
 sed -i '' "12s/$hyp/$hy2_port/g" $WORKDIR/config.json
 sed -i '' "33s/$hyp/$hy2_port/g" $WORKDIR/config.json
@@ -410,15 +434,28 @@ argo_configure() {
     fi
     if [[ "$argo_choice" == "g" || "$argo_choice" == "G" ]]; then
         reading "请输入argo固定隧道域名: " ARGO_DOMAIN
-	echo "$ARGO_DOMAIN" | tee ARGO_DOMAIN.log ARGO_DOMAIN_show.log > /dev/null
+        case "$ARGO_DOMAIN" in
+          ''|*[!A-Za-z0-9.-]*)
+            red "Argo 固定隧道域名格式无效"
+            continue
+            ;;
+        esac
+        printf '%s\n' "$ARGO_DOMAIN" > ARGO_DOMAIN.log
         green "你的argo固定隧道域名为: $ARGO_DOMAIN"
-        reading "请输入argo固定隧道密钥（当你粘贴Token时，必须以ey开头）: " ARGO_AUTH
-	echo "$ARGO_AUTH" | tee ARGO_AUTH.log ARGO_AUTH_show.log > /dev/null
-        green "你的argo固定隧道密钥为: $ARGO_AUTH"
-	rm -f -- boot.log
+        sbyg_serv00_read_secret "请输入argo固定隧道密钥（粘贴 Token 时必须以 ey 开头）: " ARGO_AUTH
+        if [ -z "$ARGO_AUTH" ]; then
+            red "Argo 固定隧道 Token 不能为空"
+            continue
+        fi
+        printf '%s\n' "$ARGO_AUTH" > ARGO_AUTH.log
+        chmod 600 ARGO_AUTH.log ARGO_DOMAIN.log
+        green "Argo 固定隧道 Token 已安全保存（内容隐藏）"
+        rm -f -- boot.log
     else
         green "使用Argo临时隧道"
-rm -f -- ARGO_AUTH.log ARGO_DOMAIN.log
+        rm -f -- ARGO_AUTH.log ARGO_DOMAIN.log ARGO_AUTH_show.log ARGO_DOMAIN_show.log
+        ARGO_AUTH=''
+        ARGO_DOMAIN=''
     fi
     break
 done
@@ -730,7 +767,7 @@ rm -f -- boot.log
 if [ -e "$(basename "${FILE_MAP[bot]}")" ]; then
    echo "$(basename "${FILE_MAP[bot]}")" > ag.txt
    agg=$(cat ag.txt)
-    if [[ $ARGO_AUTH =~ ^[A-Z0-9a-z=]{120,250}$ ]]; then
+    if sbyg_serv00_argo_fixed "$WORKDIR/ARGO_AUTH.log"; then
       argo_args=(tunnel --no-autoupdate run)
     else
      #args="tunnel --edge-ip-version auto --no-autoupdate --protocol http2 --logfile boot.log --loglevel info --url http://localhost:$vmess_port"
@@ -749,7 +786,7 @@ else
 fi
 else
    agg=$(cat ag.txt)
-    if [[ $ARGO_AUTH =~ ^[A-Z0-9a-z=]{120,250}$ ]]; then
+    if sbyg_serv00_argo_fixed "$WORKDIR/ARGO_AUTH.log"; then
       argo_args=(tunnel --no-autoupdate run)
     else
      #args="tunnel --edge-ip-version auto --no-autoupdate --protocol http2 --logfile boot.log --loglevel info --url http://localhost:$vmess_port"
@@ -1363,9 +1400,9 @@ cat sing_box.json > ${FILE_PATH}/${UUID}_singbox.txt
 V2rayN_LINK="https://${USERNAME}.${address}/${UUID}_v2sub.txt"
 Clashmeta_LINK="https://${USERNAME}.${address}/${UUID}_clashmeta.txt"
 Singbox_LINK="https://${USERNAME}.${address}/${UUID}_singbox.txt"
-hyp=$(jq -r '.inbounds[0].listen_port' config.json)
-vlp=$(jq -r '.inbounds[3].listen_port' config.json)
-vmp=$(jq -r '.inbounds[4].listen_port' config.json)
+hyp=$(sbyg_serv00_port_from_config hy2-sb config.json) || return 1
+vlp=$(sbyg_serv00_port_from_config vless-sb config.json) || return 1
+vmp=$(sbyg_serv00_port_from_config vmess-sb config.json) || return 1
 showuuid=$(jq -r '.inbounds[0].users[0].password' config.json)
 cat > list.txt <<EOF
 =================================================================================================
@@ -1540,7 +1577,7 @@ if [[ -e $WORKDIR/config.json ]]; then
   SCRIPT_PATH="$HOME/bin/$COMMAND"
   managed_root="$HOME/.local/share/sing-box-yg"
   mkdir -p "$HOME/bin" "$managed_root/lib"
-  for managed_asset in serv00.sh serv00keep.sh app.js index.html sversion serv00-assets.sha256; do
+  for managed_asset in serv00.sh serv00keep.sh app.js package.json index.html sversion serv00-assets.sha256; do
     sbyg_serv00_install_asset "$managed_asset" "$managed_root/$managed_asset" 600 || return 1
   done
   sbyg_serv00_install_asset lib/cleanup.sh "$managed_root/lib/cleanup.sh" 600 || return 1
@@ -1563,6 +1600,7 @@ if [[ ":$PATH:" != *":$HOME/bin:"* ]]; then
 fi
 if [ "$hona" = "serv00" ]; then
 sbyg_serv00_install_asset app.js "$keep_path/app.js" 600 || return 1
+sbyg_serv00_install_asset package.json "$keep_path/package.json" 600 || return 1
 fi
 sbyg_serv00_install_asset index.html "$FILE_PATH/index.html" 600 || return 1
 awk -F "更新内容" '{print $1}' "$SBYG_ASSET_DIR/sversion" | head -n 1 > "$WORKDIR/v"
@@ -1570,6 +1608,7 @@ sbyg_serv00_register_asset "$managed_root" || return 1
 sbyg_serv00_register_asset "$SCRIPT_PATH" || return 1
 sbyg_serv00_register_asset "$HOME/serv00keep.sh" || return 1
 [ "$hona" != "serv00" ] || sbyg_serv00_register_asset "$keep_path/app.js" || return 1
+[ "$hona" != "serv00" ] || sbyg_serv00_register_asset "$keep_path/package.json" || return 1
 sbyg_serv00_register_asset "$FILE_PATH/index.html" || return 1
 else
 red "未安装脚本，请选择1进行安装" && exit
@@ -1604,12 +1643,15 @@ fi
 resargo(){
 if [[ -e $WORKDIR/config.json ]]; then
 cd $WORKDIR
-argoport=$(jq -r '.inbounds[4].listen_port' config.json)
+argoport=$(sbyg_serv00_port_from_config vmess-sb config.json) || {
+  red "无法从配置中读取 vmess-sb 的 Argo 端口"
+  return 1
+}
 yellow "你可以重置临时隧道; 可以继续使用上回的固定隧道; 也可以更换固定隧道的域名或token"
 argogdshow(){
 echo
-if [ -f ARGO_AUTH_show.log ]; then
-purple "上回设置的Argo固定域名：$(cat ARGO_DOMAIN_show.log 2>/dev/null)"
+if [ -s ARGO_AUTH.log ]; then
+purple "上回设置的Argo固定域名：$(cat ARGO_DOMAIN.log 2>/dev/null)"
 purple "上回固定隧道的 Token 已安全保存（内容已隐藏）"
 purple "目前检查CF官网的Argo固定隧道端口：$argoport"
 fi
@@ -1625,8 +1667,7 @@ fi
 argo_configure
 sbyg_serv00_stop_from_file "$WORKDIR/ag.txt" 2>/dev/null || true
 agg=$(cat ag.txt)
-if [[ "$argo_choice" =~ (G|g) ]]; then
-install -m 600 ARGO_AUTH_show.log "$WORKDIR/ARGO_AUTH.log"
+if sbyg_serv00_argo_fixed "$WORKDIR/ARGO_AUTH.log"; then
 argo_args=(tunnel --no-autoupdate run)
 else
 rm -f -- boot.log

@@ -16,6 +16,7 @@ cleanup() {
 trap cleanup EXIT
 
 mkdir -p "$workdir"
+node_home=$(cygpath -w "$fake_home")
 printf '%s\n' 'test-access-token-1234' > "$workdir/UUID.txt"
 printf '%s\n' 'subscription-secret' > "$workdir/list.txt"
 cat > "$fake_home/serv00keep.sh" <<'EOF'
@@ -28,7 +29,7 @@ printf 'ports\n' >> "$HOME/port-runs"
 EOF
 chmod 700 "$fake_home/serv00keep.sh" "$fake_home/webport.sh"
 
-HOME="$fake_home" SBYG_SERV00_USER=tester SBYG_APP_PORT=0 SBYG_DISABLE_AUTO_KEEP=1 \
+HOME="$fake_home" USERPROFILE="$node_home" SBYG_SERV00_USER=tester SBYG_APP_PORT=0 SBYG_DISABLE_AUTO_KEEP=1 \
   node "$repo_root/app.js" > "$tmpdir/app.log" 2>&1 &
 server_pid=$!
 
@@ -59,7 +60,15 @@ done
 grep -Fx 'run' "$fake_home/keep-runs"
 
 curl --fail --silent "http://127.0.0.1:$port/jc/test-access-token-1234" > "$tmpdir/status"
-jq -e '.config_present == false and .subscription_present == true' "$tmpdir/status" >/dev/null
+if command -v jq >/dev/null 2>&1; then
+  jq -e '.config_present == false and .subscription_present == true' "$tmpdir/status" >/dev/null
+else
+  node -e '
+    const fs = require("fs");
+    const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    if (value.config_present !== false || value.subscription_present !== true) process.exit(1);
+  ' "$tmpdir/status"
+fi
 if grep -E 'ps aux|--token|subscription-secret' "$tmpdir/status"; then
   echo 'Serv00 status endpoint exposed process arguments or secrets' >&2
   exit 1

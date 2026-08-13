@@ -45,4 +45,30 @@ jq -e '.experimental.cache_file.store_dns == true' "$tmpdir/v114.json"
 jq -e '.route.rule_set[0] | has("download_detour") | not' "$tmpdir/v114.json"
 jq -e '.route.rule_set[0].http_client == "direct"' "$tmpdir/v114.json"
 
+cat > "$tmpdir/custom.json" <<'EOF'
+{
+  "dns": {
+    "servers": [
+      {"type":"https","tag":"remote-dns","server":"https://dns.example.invalid/dns-query"},
+      {"type":"local","tag":"local"}
+    ]
+  },
+  "http_clients": [
+    {"tag":"direct","engine":"go"}
+  ],
+  "route": {
+    "rule_set": [
+      {"type":"remote","tag":"already-http","url":"https://example.invalid/a.srs","http_client":"direct","download_detour":"legacy"}
+    ]
+  }
+}
+EOF
+sbyg_config_prepare "$tmpdir/custom.json" "$tmpdir/custom-v114.json" v1.14.0
+jq -e '[.dns.servers[] | select(.tag == "local")] | length == 1' "$tmpdir/custom-v114.json"
+jq -e '[.http_clients[] | select(.tag == "direct")] | length == 1' "$tmpdir/custom-v114.json"
+jq -e '.route.rule_set[0].http_client == "direct" and (.route.rule_set[0] | has("download_detour") | not)' "$tmpdir/custom-v114.json"
+sbyg_config_prepare "$tmpdir/custom-v114.json" "$tmpdir/custom-v114-repeat.json" v1.14.0
+jq -e '[.dns.servers[] | select(.tag == "local")] | length == 1' "$tmpdir/custom-v114-repeat.json"
+jq -e '[.http_clients[] | select(.tag == "direct")] | length == 1' "$tmpdir/custom-v114-repeat.json"
+
 echo 'sing-box configuration compatibility: PASS'
