@@ -493,6 +493,55 @@ private_key=$(<private_key.txt)
 public_key=$(<public_key.txt)
 openssl ecparam -genkey -name prime256v1 -out "private.key"
 openssl req -new -x509 -days 3650 -key "private.key" -out "cert.pem" -subj "/CN=$USERNAME.${address}"
+# WARP is opt-in and must use a user-owned account tuple.  Never ship a
+# reusable WireGuard private key in the repository.
+warp_enabled=0
+warp_outbound_json=''
+if [[ "$nb" =~ ^(14|15)$ ]]; then
+    if [ -n "${SBYG_WARP_PRIVATE_KEY:-}" ] && [ -n "${SBYG_WARP_LOCAL_IPV4:-}" ] && [ -n "${SBYG_WARP_LOCAL_IPV6:-}" ] && [ -n "${SBYG_WARP_RESERVED:-}" ]; then
+        if [[ ! "$SBYG_WARP_PRIVATE_KEY" =~ ^[A-Za-z0-9+/]{43}=$ || ! "$SBYG_WARP_LOCAL_IPV4" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}/[0-9]{1,2}$ || ! "$SBYG_WARP_LOCAL_IPV6" =~ ^[0-9A-Fa-f:]+/[0-9]{1,3}$ ]]; then
+            red "WARP 鍙傛暟鏍煎紡鏃犳晥锛屽凡鎷掔粷鍐欏叆閰嶇疆"
+            return 1
+        fi
+        IFS=',' read -r warp_reserved_1 warp_reserved_2 warp_reserved_3 warp_reserved_extra <<< "$SBYG_WARP_RESERVED"
+        for warp_reserved_value in "$warp_reserved_1" "$warp_reserved_2" "$warp_reserved_3"; do
+            if [[ ! "$warp_reserved_value" =~ ^[0-9]{1,3}$ ]] || ((10#$warp_reserved_value > 255)); then
+                red "WARP reserved 必须是三个 0-255 的十进制整数"
+                return 1
+            fi
+        done
+        if [ -n "$warp_reserved_extra" ]; then
+            red "WARP reserved 必须恰好包含三个数字"
+            return 1
+        fi
+        warp_reserved_1=$((10#$warp_reserved_1))
+        warp_reserved_2=$((10#$warp_reserved_2))
+        warp_reserved_3=$((10#$warp_reserved_3))
+        warp_outbound_json=$(cat <<EOF
+     {
+        "type": "wireguard",
+        "tag": "wg",
+        "server": "162.159.192.200",
+        "server_port": 4500,
+        "local_address": [
+                "$SBYG_WARP_LOCAL_IPV4",
+                "$SBYG_WARP_LOCAL_IPV6"
+        ],
+        "private_key": "$SBYG_WARP_PRIVATE_KEY",
+        "peer_public_key": "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=",
+        "reserved": [
+            $warp_reserved_1,
+            $warp_reserved_2,
+            $warp_reserved_3
+        ]
+    },
+EOF
+)
+        warp_enabled=1
+    else
+        yellow "未配置用户自有 WARP 凭据，相关分流将使用 direct"
+    fi
+fi
   cat > config.json << EOF
 {
   "log": {
@@ -609,23 +658,7 @@ openssl req -new -x509 -days 3650 -key "private.key" -out "cert.pem" -subj "/CN=
     }
  ],
      "outbounds": [
-     {
-        "type": "wireguard",
-        "tag": "wg",
-        "server": "162.159.192.200",
-        "server_port": 4500,
-        "local_address": [
-                "172.16.0.2/32",
-                "2606:4700:110:8f77:1ca9:f086:846c:5f9e/128"
-        ],
-        "private_key": "wIxszdR2nMdA7a2Ul3XQcniSfSZqdqjPb6w6opvf5AU=",
-        "peer_public_key": "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=",
-        "reserved": [
-            126,
-            246,
-            173
-        ]
-    },
+$warp_outbound_json
     {
       "type": "direct",
       "tag": "direct"
@@ -633,7 +666,7 @@ openssl req -new -x509 -days 3650 -key "private.key" -out "cert.pem" -subj "/CN=
   ],
    "route": {
 EOF
-if [[ "$nb" =~ 14|15 ]]; then
+if [[ "$warp_enabled" == 1 ]]; then
 cat >> config.json <<EOF 
     "rules": [
     {

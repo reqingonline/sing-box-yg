@@ -43,6 +43,13 @@ if grep -Eq '"private_key":[[:space:]]*"[A-Za-z0-9+/]{43}="' "$repo_root/serv00k
   echo 'Serv00 script embeds a reusable private key' >&2
   exit 1
 fi
+if grep -REq '"private_key"[[:space:]]*:[[:space:]]*"[A-Za-z0-9+/]{43}="|^[[:space:]]*pvk=[A-Za-z0-9+/]{43}=' \
+  "$repo_root/sb.sh" "$repo_root/serv00.sh" "$repo_root/serv00keep.sh"; then
+  echo 'repository embeds a reusable WireGuard private key' >&2
+  exit 1
+fi
+grep -F 'SBYG_WARP_PRIVATE_KEY' "$repo_root/sb.sh"
+grep -F 'SBYG_WARP_PRIVATE_KEY' "$repo_root/serv00.sh"
 grep -F 'SBYG_WARP_PRIVATE_KEY' "$repo_root/serv00keep.sh"
 grep -F 'if [[ "$warp_enabled" == 1 ]]' "$repo_root/serv00keep.sh"
 grep -F 'sbyg_serv00_verify_dependency' "$repo_root/serv00.sh"

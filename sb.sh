@@ -3558,9 +3558,16 @@ result
 }
 output=$(warpcode)
 if ! echo "$output" 2>/dev/null | grep -w "private_key" > /dev/null; then
-v6=2606:4700:110:860e:738f:b37:f15:d38d
-pvk=g9I2sgUH6OCbIBTehkEfVEnuvInHYZvPOFhWchMLSc4=
-res=[33,217,129]
+if [[ "$SBYG_WARP_PRIVATE_KEY" =~ ^[A-Za-z0-9+/]{43}=$ &&
+      "$SBYG_WARP_IPV6" =~ ^[0-9A-Fa-f:]+$ &&
+      "$SBYG_WARP_RESERVED" =~ ^[0-9]+,[0-9]+,[0-9]+$ ]]; then
+pvk=$SBYG_WARP_PRIVATE_KEY
+v6=$SBYG_WARP_IPV6
+res=[$SBYG_WARP_RESERVED]
+else
+red 'WARP 璐︽埛娉ㄥ唽澶辫触锛屾湭閰嶇疆鐢ㄦ埛鑷湁鍑嵁锛岀煭缁濅娇鐢ㄥ叡浜閽?'
+return 1
+fi
 else
 pvk=$(echo "$output" | sed -n 4p | awk '{print $2}' | tr -d ' "' | sed 's/.$//')
 v6=$(echo "$output" | sed -n 7p | awk '{print $2}' | tr -d ' "')
