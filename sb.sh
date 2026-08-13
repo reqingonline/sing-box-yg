@@ -3563,7 +3563,18 @@ if [[ "$SBYG_WARP_PRIVATE_KEY" =~ ^[A-Za-z0-9+/]{43}=$ &&
       "$SBYG_WARP_RESERVED" =~ ^[0-9]+,[0-9]+,[0-9]+$ ]]; then
 pvk=$SBYG_WARP_PRIVATE_KEY
 v6=$SBYG_WARP_IPV6
-res=[$SBYG_WARP_RESERVED]
+IFS=',' read -r warp_reserved_1 warp_reserved_2 warp_reserved_3 warp_reserved_extra <<< "$SBYG_WARP_RESERVED"
+for warp_reserved_value in "$warp_reserved_1" "$warp_reserved_2" "$warp_reserved_3"; do
+if [[ ! "$warp_reserved_value" =~ ^[0-9]{1,3}$ ]] || ((10#$warp_reserved_value > 255)); then
+red 'WARP reserved 必须是三个 0-255 的十进制整数'
+return 1
+fi
+done
+if [ -n "$warp_reserved_extra" ]; then
+red 'WARP reserved 必须恰好包含三个数字'
+return 1
+fi
+res=[$((10#$warp_reserved_1)),$((10#$warp_reserved_2)),$((10#$warp_reserved_3))]
 else
 red 'WARP 璐︽埛娉ㄥ唽澶辫触锛屾湭閰嶇疆鐢ㄦ埛鑷湁鍑嵁锛岀煭缁濅娇鐢ㄥ叡浜閽?'
 return 1
